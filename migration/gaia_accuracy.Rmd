@@ -1,0 +1,250 @@
+---
+title: "gaia validation"
+output: html_document
+date: "2026-02-10"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+load libraries
+```{r}
+library(gaia)
+library(tidyr)
+library(dplyr)
+library(data.table)
+library(ggplot2)
+#library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(RColorBrewer)
+library(viridis)
+library(stringr)
+```
+
+ggplot theme
+```{r}
+## ggplot theme
+
+my_theme <- function() {
+    theme_classic() +
+    theme( 
+        plot.title = element_text(color="black", size=12, face="bold"),
+        axis.title.x = element_text(color="black", size=20, face="bold", vjust=2),
+        axis.title.y = element_text(color="black", size=20, face="bold", vjust=2),
+        axis.text=element_text(size=24),
+        )
+}
+
+options(repr.plot.width=14, repr.plot.height=8)
+```
+
+set work dir
+```{r}
+setwd("~/git/bacterial-args/migration")
+```
+
+define cost matrices
+```{r}
+# equally likely transitions/costs 
+eq_cost.mat = matrix(c(0, 1, 1, 1, 0, 1, 1, 1, 0), nrow = 3, ncol = 3)
+eq_cost.mat
+
+# inverse migration rates from msprime
+ss_cost.mat = matrix(c(0, 1/0.0001, 1/0.0001, 
+                          1/0.0006, 0, 1/0.0002, 
+                          1/0.0006, 1/0.0002, 0), nrow = 3, ncol = 3)
+
+ss_cost.mat
+
+# access via cms[]
+cms <- list(eq = eq_cost.mat, ss = ss_cost.mat)
+
+```
+
+goal: make df: bin, position, a, b, sim_internal_node_state (msprime), sim_internal_node_state (gaia), inf_internal_node_state (gaia)
+
+```{r}
+
+# read ts. extract node_ids, state_ids (incl. internal if sim). 
+# export ts, nodes, tip locations 
+
+get_nodes <- function(filename) {
+
+    ts = treeseq_load(filename)
+    nodes = treeseq_nodes(ts)
+    edges = treeseq_edges(ts)
+
+    samples <- subset(nodes, is_sample == 1L)
+
+    # use population_id as geography; drop missing values (e.g., -1)
+    ok       <- samples$population_id >= 0
+    samples  <- samples[ok, , drop = FALSE]
+    
+    # remap unique population ids to 1..N_DEMES
+    pop_levels <- sort(unique(samples$population_id))
+    state_map  <- setNames(seq_along(pop_levels), pop_levels)
+    state_id   <- unname(state_map[ as.character(samples$population_id) ])
+    
+    # georef table for gaia w/ node_id, state_id cols
+    sample_locations <- data.frame(
+      node_id  = samples$node_id,
+      state_id = state_id  # Make sure sample locations are 1-based (curr 0-based)
+    )
+    
+    sample_locations <- as.matrix(sample_locations[, c("node_id","state_id")])
+    storage.mode(sample_locations) <- "integer"
+    colnames(sample_locations) <- c("node_id","state_id")
+    
+    return(list(ts = ts, nodes = nodes, sample_locations = sample_locations))
+}
+
+get_nodes_inf <- function(filename, nodes_sim) {
+
+    ts = treeseq_load(filename)
+    nodes = treeseq_nodes(ts)
+    edges = treeseq_edges(ts)
+    
+    samples <- subset(nodes_sim$nodes, is_sample == 1L)
+    nodes[1:nrow(samples),] <- samples
+
+    # use population_id as geography; drop missing values (e.g., -1)
+    ok       <- samples$population_id >= 0
+    samples  <- samples[ok, , drop = FALSE]
+    
+    # remap unique population ids to 1..N_DEMES
+    pop_levels <- sort(unique(samples$population_id))
+    state_map  <- setNames(seq_along(pop_levels), pop_levels)
+    state_id   <- unname(state_map[ as.character(samples$population_id) ])
+    
+    # georef table for gaia w/ node_id, state_id cols
+    sample_locations <- data.frame(
+      node_id  = samples$node_id,
+      state_id = state_id  # Make sure sample locations are 1-based (curr 0-based)
+    )
+    
+    sample_locations <- as.matrix(sample_locations[, c("node_id","state_id")])
+    storage.mode(sample_locations) <- "integer"
+    colnames(sample_locations) <- c("node_id","state_id")
+    
+    return(list(ts = ts, nodes = nodes, sample_locations = sample_locations))
+}
+
+```
+
+```{r}
+
+# run mpr function N times. extract estimated_states per run //// later: extract node_costs
+# return node_states_df containing estimated states for each rep 
+
+mpr_reps <- function(ts, sample_locations, cost.mat, nodes, nrep) {
+
+    node_states_df <- data.frame(node_time=nodes$time, node_state=nodes$population_id+1L)
+
+    for (i in 1:nrep) { 
+        mpr <- treeseq_discrete_mpr(ts, sample_locations, cost.mat)
+        estimated_node_states <- treeseq_discrete_mpr_minimize(mpr)
+        col_n <- paste0('rep',as.character(i))
+        node_states_df[[col_n]] = estimated_node_states }
+
+    node_states_df$node <- 0:(nrow(node_states_df) -1)
+
+    return(node_states_df)
+    
+}
+
+```
+
+get most frequently inferred internal node state for a given pair of samples 
+compare to ground truth (sim node_state) 
+average score across bins 
+return score_df
+```{r}
+get_mode <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+score_reps <- function(sim_locations_path, inf_locations_path, mpr_reps_output) { 
+  
+  loc_sim <- read.csv(sim_locations_path) %>% mutate(mrca_population = as.integer(sub(".*\\D", "", mrca_population)) +1) 
+  loc_inf <- read.csv(inf_locations_path) %>% select('sample_a', 'sample_b', 'bin', 'position', 'node')
+    
+  df <- loc_sim %>% 
+                        select(sample_a, sample_b, bin, position, mrca_population) %>% 
+                        left_join(loc_inf, by = c('sample_a', 'sample_b', 'bin', 'position')) %>% 
+                        left_join(mpr_reps_output, by = 'node') %>% 
+                        rowwise() %>%
+                        mutate(mode = get_mode(c_across(starts_with("rep")))) %>%
+                        ungroup() %>% 
+    
+      group_by(bin, position) %>% 
+      mutate(score = case_when(
+                                mode == mrca_population ~ 1,
+                                mode != mrca_population ~ 0)) %>%
+      group_by(bin, position) %>%
+      summarise(pbin = mean(score))
+    
+    return(df)  
+}
+```
+
+
+all together function 
+```{r}
+
+get_scores <- function(ts_sim_path, ts_inf_path, loc_sim_path, loc_inf_path, cost.matrix, nreps) {
+  
+  sim_nodes <- get_nodes(ts_sim_path)
+  
+  inf_nodes <- get_nodes_inf(ts_inf_path, sim_nodes)
+  
+  reps <- mpr_reps(inf_nodes$ts, inf_nodes$sample_locations, cost.matrix, inf_nodes$nodes, nreps)
+  
+  df <- score_reps(loc_sim_path, loc_inf_path, reps)
+  
+  return(df)
+
+}
+
+```
+
+
+file import
+```{r}
+
+## tree sequences ##
+
+sim_files <- c('ts_ss.trees',
+               'ts_eq.trees')
+
+inf_files <- c('ts_ss_inf.trees',
+               'ts_eq_inf.trees')
+
+## internal node locations df (binned) ##
+
+sim_locs <- c('locations_ss.csv', 
+              'locations_eq.csv')
+
+inf_locs <- c('locations_ss_inf.csv',
+              'locations_eq_inf.csv') ##inf node states are inherently unlabeled. 
+
+## cost matrices: cms$ss, cms$eq 
+
+```
+
+```{r}
+
+# config
+ts_sim_path <- sim_files[1]
+ts_inf_path <- inf_files[1]
+loc_sim_path <- sim_locs[1] 
+loc_inf_path <- inf_locs[1]
+cost.matrix <- cms$ss
+nreps <- 10 
+
+get_scores(ts_sim_path, ts_inf_path, loc_sim_path, loc_inf_path, cost.matrix, nreps)
+
+```
+
