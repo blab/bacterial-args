@@ -1,0 +1,348 @@
+
+# gaia accuracy testing
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+load libraries
+```{r}
+library(gaia)
+library(tidyr)
+library(dplyr)
+library(data.table)
+library(ggplot2)
+#library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(RColorBrewer)
+library(viridis)
+library(stringr)
+library(purrr)
+library(scales)
+```
+
+set work dir
+```{r}
+setwd("/home/nahmed/git/bacterial-args/migration/in_terminal")
+```
+
+file import
+```{r}
+
+
+
+# ###### source sink #######
+# 
+# ## tree sequences ##
+# 
+# sim_ss_files <- paste0('trees/',list.files('trees', pattern = "^sim_ss"))
+# 
+# inf_ss_files <- paste0('trees/',list.files('trees', pattern = "^inf_ss"))
+# 
+# ## internal node locations df (binned) ##
+# 
+# sim_ss_locs <- paste0('locations/',list.files('locations', pattern = "^sim_ss"))
+# 
+# inf_ss_locs <- paste0('locations/',list.files('locations', pattern = "^inf_ss")) ##inf node states are inherently unlabeled. 
+# 
+# ###### equal migration ######
+# 
+# ## tree sequences ##
+# 
+# sim_eq_files <- paste0('trees/',list.files('trees', pattern = "^sim_eq"))
+# 
+# inf_eq_files <- paste0('trees/',list.files('trees', pattern = "^inf_eq"))
+# 
+# ## internal node locations df (binned) ##
+# 
+# sim_eq_locs <- paste0('locations/',list.files('locations', pattern = "^sim_eq"))
+# 
+# inf_eq_locs <- paste0('locations/',list.files('locations', pattern = "^inf_eq")) ##inf node states are inherently unlabeled. 
+# 
+# ## cost matrices: cms$ss, cms$eq
+
+```
+
+ggplot theme
+```{r}
+## ggplot theme
+
+my_theme <- function() {
+    theme_classic() +
+    theme( 
+        plot.title = element_text(color="black", size=12, face="bold"),
+        axis.title.x = element_text(color="black", size=20, face="bold", vjust=2),
+        axis.title.y = element_text(color="black", size=20, face="bold", vjust=2),
+        axis.text=element_text(size=24),
+        )
+}
+
+options(repr.plot.width=14, repr.plot.height=8)
+```
+
+```{r}
+parse_params <- function(path) {
+  base <- basename(path)
+
+  model <- str_match(base, "^(sim|inf)_(ss|eq)_")[,3]
+  mu    <- str_match(base, "_mu([0-9.]+e[-+][0-9]+)_")[,2]
+  mr    <- str_match(base, "_mr([0-9.]+e[-+][0-9]+)_")[,2]
+  seed  <- str_match(base, "_seed([0-9]+)")[,2]
+
+  tibble(
+    model = model,
+    mu    = mu,
+    mr    = mr,
+    seed  = as.integer(seed)
+  )
+}
+
+# equal-cost matrix 
+eq_cost_mat <- matrix(c(
+  0,1,1,
+  1,0,1,
+  1,1,0
+), nrow=3, byrow=TRUE)
+
+# source-sink-ish cost function from migration_rate
+get_ss_cost_matrix_from_mr <- function(mr_str) {
+  src_sink <- as.numeric(mr_str)
+  sink_src <- src_sink / 10
+  sink_sink <- sink_src * 2
+
+  matrix(c(
+    0,          1/src_sink, 1/src_sink,
+    1/sink_src, 0,          1/sink_sink,
+    1/sink_src, 1/sink_sink, 0
+  ), nrow=3, byrow=TRUE)
+}
+
+
+```
+
+```{r}
+get_nodes_sim <- function(trees_path) {
+  ts    <- treeseq_load(trees_path)
+  nodes <- treeseq_nodes(ts)
+
+  samples <- subset(nodes, is_sample == 1L)
+  ok <- samples$population_id >= 0
+  samples <- samples[ok, , drop=FALSE]
+
+  # map population_id -> 1..K for GAIA
+  pop_levels <- sort(unique(samples$population_id))
+  state_map  <- setNames(seq_along(pop_levels), pop_levels)
+  state_id   <- unname(state_map[as.character(samples$population_id)])
+
+  sample_locations <- as.matrix(data.frame(
+    node_id  = samples$node_id,
+    state_id = state_id
+  ))
+  storage.mode(sample_locations) <- "integer"
+  colnames(sample_locations) <- c("node_id","state_id")
+
+  list(ts=ts, nodes=nodes, sample_locations=sample_locations)
+}
+
+# inferred tree: overwrite tip labels using sim nodes 
+get_nodes_inf_with_sim_tips <- function(inf_trees_path, sim_nodes_obj) {
+  ts    <- treeseq_load(inf_trees_path)
+  nodes <- treeseq_nodes(ts)
+
+  sim_samples <- subset(sim_nodes_obj$nodes, is_sample == 1L)
+  nodes[1:nrow(sim_samples), ] <- sim_samples
+
+  samples <- subset(nodes, is_sample == 1L)
+  ok <- samples$population_id >= 0
+  samples <- samples[ok, , drop=FALSE]
+
+  pop_levels <- sort(unique(samples$population_id))
+  state_map  <- setNames(seq_along(pop_levels), pop_levels)
+  state_id   <- unname(state_map[as.character(samples$population_id)])
+
+  sample_locations <- as.matrix(data.frame(
+    node_id  = samples$node_id,
+    state_id = state_id
+  ))
+  storage.mode(sample_locations) <- "integer"
+  colnames(sample_locations) <- c("node_id","state_id")
+
+  list(ts=ts, nodes=nodes, sample_locations=sample_locations)
+}
+
+get_mode <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+mpr_reps <- function(ts, sample_locations, cost_mat, nodes, nrep) {
+  node_states_df <- data.frame(
+    node_time  = nodes$time,
+    node_state = nodes$population_id + 1L
+  )
+
+  for (i in seq_len(nrep)) {
+    mpr <- treeseq_discrete_mpr(ts, sample_locations, cost_mat)
+    est <- treeseq_discrete_mpr_minimize(mpr)
+    node_states_df[[paste0("rep", i)]] <- est
+  }
+
+  node_states_df$node <- 0:(nrow(node_states_df) - 1L)
+  node_states_df
+}
+
+score_reps <- function(sim_locations_path, inf_locations_path, mpr_reps_output) {
+  loc_sim <- read.csv(sim_locations_path) %>%
+    mutate(mrca_population = as.integer(str_extract(mrca_population, "[0-9]+")) + 1L) %>%
+    select(sample_a, sample_b, bin, position, mrca_population)
+
+  loc_inf <- read.csv(inf_locations_path) %>%
+    select(sample_a, sample_b, bin, position, node)
+
+  loc_sim %>%
+    left_join(loc_inf, by=c("sample_a","sample_b","bin","position")) %>%
+    left_join(mpr_reps_output, by="node") %>%
+    rowwise() %>%
+    mutate(mode = get_mode(c_across(starts_with("rep"))),
+           score = as.integer(mode == mrca_population)) %>%
+    ungroup() %>%
+    group_by(bin, position) %>%
+    summarise(pbin = mean(score), .groups="drop")
+}
+
+get_scores_one_run <- function(ts_sim_path, ts_inf_path, loc_sim_path, loc_inf_path,
+                               cost_mat, nreps=10) {
+
+  sim_nodes <- get_nodes_sim(ts_sim_path)
+  inf_nodes <- get_nodes_inf_with_sim_tips(ts_inf_path, sim_nodes)
+
+  reps <- mpr_reps(inf_nodes$ts, inf_nodes$sample_locations, cost_mat, inf_nodes$nodes, nreps)
+  score_reps(loc_sim_path, loc_inf_path, reps)
+}
+
+```
+
+```{r}
+build_run_table <- function(trees_dir="trees", locs_dir="locations") {
+  sim_trees <- list.files(trees_dir, pattern="^sim_(ss|eq).*\\.trees$", full.names=TRUE)
+  inf_trees <- list.files(trees_dir, pattern="^inf_(ss|eq).*\\.trees$", full.names=TRUE)
+  sim_locs  <- list.files(locs_dir,  pattern="^sim_(ss|eq).*\\.csv$",   full.names=TRUE)
+  inf_locs  <- list.files(locs_dir,  pattern="^inf_(ss|eq).*\\.csv$",   full.names=TRUE)
+
+  sim_trees_df <- bind_cols(tibble(sim_trees=sim_trees), parse_params(sim_trees))
+  inf_trees_df <- bind_cols(tibble(inf_trees=inf_trees), parse_params(inf_trees))
+  sim_locs_df  <- bind_cols(tibble(sim_locs=sim_locs),   parse_params(sim_locs))
+  inf_locs_df  <- bind_cols(tibble(inf_locs=inf_locs),   parse_params(inf_locs))
+
+  sim_trees_df %>%
+    inner_join(inf_trees_df, by=c("model","mu","mr","seed")) %>%
+    inner_join(sim_locs_df,  by=c("model","mu","mr","seed")) %>%
+    inner_join(inf_locs_df,  by=c("model","mu","mr","seed")) %>%
+    arrange(model, mu, mr, seed)
+}
+
+```
+
+```{r}
+runs <- build_run_table("trees", "locations")
+
+scores_all <- pmap_dfr(
+  runs,
+  function(model, mu, mr, seed, sim_trees, inf_trees, sim_locs, inf_locs) {
+
+    cost_mat <- if (model == "ss") {
+      get_ss_cost_matrix_from_mr(mr)
+    } else {
+      eq_cost_mat
+    }
+
+    df <- get_scores_one_run(
+      ts_sim_path  = sim_trees,
+      ts_inf_path  = inf_trees,
+      loc_sim_path = sim_locs,
+      loc_inf_path = inf_locs,
+      cost_mat     = cost_mat,
+      nreps        = 10
+    )
+
+    df %>%
+      mutate(model=model, mu=mu, mr=mr, seed=seed) 
+  }
+)
+
+
+```
+```{r}
+#write.csv(scores_all, "scores_all_001.csv")
+```
+
+
+```{r}
+
+scores_all2 <- scores_all %>%
+  mutate(model = recode(model, "eq" = "equal migration", "ss" = "source-sink")) %>% 
+  mutate(
+    mr_num = as.numeric(mr),
+    mr_cat = case_when(
+      mr_num == 6.000e-6 ~ "low",
+      mr_num == 6.000e-4 ~ "medium",
+      TRUE           ~ "high"
+    )
+  )
+
+```
+
+```{r}
+ggplot(scores_all2, aes(x=position, y=pbin,
+                       group=interaction(mu, mr, seed),
+                       color=mr_cat)) +
+  geom_line(alpha=0.5) +
+  facet_wrap(~model, ncol=1) +
+  labs(x="genomic position", y="accuracy (P[bin])", color="migration rate") +
+  theme_classic() + 
+  scale_x_continuous(labels = scales::label_number(accuracy = 1))
+```
+
+
+
+```{r}
+
+
+ggplot(scores_all2, aes(x=position, y=pbin,
+                       group=interaction(mu, mr, seed),
+                       color=mu)) +
+  geom_line(alpha=0.5) +
+  facet_wrap(~model, ncol=1) +
+  labs(x="genomic position", y="accuracy (P[bin])", color="mutation rate") +
+  theme_classic() + 
+  scale_x_continuous(labels = scales::label_number(accuracy = 1))
+```
+
+
+```{r}
+run_summary <- scores_all2 %>%
+  group_by(model, mu, mr, seed, mr_cat) %>%
+  summarise(mean_acc = mean(pbin), .groups="drop") %>%
+  mutate(model = recode(model, "eq" = "equal migration", "ss" = "source-sink")) 
+
+
+ggplot(run_summary, aes(x=mr_cat, y=mean_acc)) +
+  geom_point(alpha=0.7) +
+  facet_wrap(~model, scales="free_x") +
+  scale_x_discrete() +
+  labs(x="migration strength", y="mean accuracy", title="per-run GAIA accuracy vs migration strength") +
+  theme_classic()
+
+```
+
+```{r}
+ggplot(run_summary, aes(x=mu, y=mean_acc)) +
+  geom_point(alpha=0.7) +
+  facet_wrap(~model, scales="free_x") +
+  scale_x_discrete() +
+  labs(x="mutation rate, μ", y="mean accuracy", title="per-run GAIA accuracy vs mutation rate") +
+  theme_classic()
+```
+
+
