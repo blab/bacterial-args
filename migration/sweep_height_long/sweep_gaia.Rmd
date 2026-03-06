@@ -124,7 +124,7 @@ get_nodes_sim <- function(trees_path) {
   list(ts=ts, nodes=nodes, sample_locations=sample_locations)
 }
 
-# inferred tree: overwrite tip labels using sim nodes 
+# overwrite tip labels on inferred ts using sim nodes 
 get_nodes_inf_with_sim_tips <- function(inf_trees_path, sim_nodes_obj) {
   ts    <- treeseq_load(inf_trees_path)
   nodes <- treeseq_nodes(ts)
@@ -155,6 +155,7 @@ get_mode <- function(x) {
   ux[which.max(tabulate(match(x, ux)))]
 }
 
+# run mpr function N times 
 mpr_reps <- function(ts, sample_locations, cost_mat, nodes, nrep) {
   node_states_df <- data.frame(
     node_time  = nodes$time,
@@ -162,7 +163,7 @@ mpr_reps <- function(ts, sample_locations, cost_mat, nodes, nrep) {
   )
 
   for (i in seq_len(nrep)) {
-    mpr <- treeseq_discrete_mpr(ts, sample_locations, cost_mat) ## mpr object contains certainties across locations for each node 
+    mpr <- treeseq_discrete_mpr(ts, sample_locations, cost_mat) ## mpr object contains certainties across locations for each node; export this in the future 
     est <- treeseq_discrete_mpr_minimize(mpr)
     node_states_df[[paste0("rep", i)]] <- est
   }
@@ -171,6 +172,13 @@ mpr_reps <- function(ts, sample_locations, cost_mat, nodes, nrep) {
   node_states_df
 }
 
+```
+
+
+### scoring functions
+```{r}
+
+# scoring GAIA on inferred tree sequence
 score_reps <- function(sim_locations_path, inf_locations_path, mpr_reps_output) {
   loc_sim <- read.csv(sim_locations_path) %>%
     mutate(mrca_population = as.integer(str_extract(mrca_population, "[0-9]+")) + 1L) %>%
@@ -185,16 +193,17 @@ score_reps <- function(sim_locations_path, inf_locations_path, mpr_reps_output) 
     rowwise() %>%
     mutate(mode = get_mode(c_across(starts_with("rep"))),
            score = as.integer(mode == mrca_population)) %>%
-    ungroup() %>%
-    group_by(bin, position) %>%
-    summarise(
-        pbin = mean(score, na.rm=TRUE), 
-        n_pairs = sum(!is.na(score)),
-        .groups="drop"
-    ) #remove NAs- these tend to correspond to flanking trees. 
+    ungroup() 
+    #%>%
+    # group_by(bin, position) %>%
+    # summarise(
+    #     pbin = mean(score, na.rm=TRUE),
+    #     n_pairs = sum(!is.na(score)),
+    #     .groups="drop" #remove NAs- these tend to correspond to flanking trees.
+    # )
 }
 
-
+# scoring GAIA on simulated tree sequence
 score_reps_sim_only <- function(sim_locations_path, mpr_reps_output) {
   loc <- read.csv(sim_locations_path) %>%
     mutate(mrca_population = as.integer(str_extract(mrca_population, "[0-9]+")) + 1L) %>%
@@ -205,18 +214,18 @@ score_reps_sim_only <- function(sim_locations_path, mpr_reps_output) {
     rowwise() %>%
     mutate(mode = get_mode(c_across(starts_with("rep"))),
           score = as.integer(mode == mrca_population)) %>%
-    ungroup() %>%
-    group_by(bin, position) %>% #collapsing all pairwise scores into bins 
-    summarise(
-      pbin = mean(score, na.rm = TRUE),
-      n_pairs = sum(!is.na(score)),
-      .groups = "drop"
-    )
+    ungroup() 
+    # %>%
+    # group_by(bin, position) %>% #collapsing all pairwise scores into bins
+    # summarise(
+    #   pbin = mean(score, na.rm = TRUE),
+    #   n_pairs = sum(!is.na(score)),
+    #   .groups = "drop"
+    # )
 }
 
 
-get_scores_one_run <- function(ts_sim_path, ts_inf_path, loc_sim_path, loc_inf_path,
-                               cost_mat, nreps=10) {
+get_scores_one_run <- function(ts_sim_path, ts_inf_path, loc_sim_path, loc_inf_path, cost_mat, nreps=10) {
 
   sim_nodes <- get_nodes_sim(ts_sim_path)
   inf_nodes <- get_nodes_inf_with_sim_tips(ts_inf_path, sim_nodes)
@@ -233,7 +242,6 @@ get_scores_one_run_on_sim_ts <- function(ts_sim_path, sim_locations_path, cost_m
 }
 
 ```
-
 
 # build and organize runs 
 ```{r}
@@ -258,14 +266,12 @@ build_run_table <- function(trees_dir="trees", locs_dir="locations") {
 
 ```
 
-# scoring sim and inf location estimates using equal cost function 
+# scoring sim and inf location estimates (pairwise)
 ```{r}
 
 runs <- build_run_table("trees", "locations")
 
-scores_inf_eq <- pmap_dfr(
-  runs,
-  function(model, mu, mr, pm, seed, sim_trees, inf_trees, sim_locs, inf_locs, ...) {
+scores_inf_eq <- pmap_dfr(runs, function(model, mu, mr, pm, seed, sim_trees, inf_trees, sim_locs, inf_locs, ...) {
 
     df <- get_scores_one_run(
       ts_sim_path  = sim_trees,
@@ -289,9 +295,7 @@ scores_inf_eq <- pmap_dfr(
   }
 )
 
-scores_sim_eq <- pmap_dfr(
-  runs,
-  function(model, mu, mr, pm, seed, sim_trees, inf_trees, sim_locs, inf_locs, ...) {
+scores_sim_eq <- pmap_dfr(runs, function(model, mu, mr, pm, seed, sim_trees, inf_trees, sim_locs, inf_locs, ...) {
 
     df <- get_scores_one_run_on_sim_ts(
       ts_sim_path = sim_trees,
@@ -313,14 +317,42 @@ scores_sim_eq <- pmap_dfr(
   }
 )
 
+
+scores_eq_pairs <- bind_rows(scores_inf_eq, scores_sim_eq)
+#write.csv(scores_eq_pairs, "scores_eq_pairs_002.csv")
+
 ```
 
-# aggregate output dfs and export to csv
+
+# per-bin scores 
 ```{r}
 
-scores_eq <- bind_rows(scores_inf_eq, scores_sim_eq)
+scores_eq_bin <- scores_eq_pairs %>%
+  group_by(model, pm, mu, mr, seed, gaia_target, costfunction, bin, position) %>%
+  summarise(
+    pbin = mean(score, na.rm = TRUE),
+    n_pairs = sum(!is.na(score)),
+    mean_node_height_sim = mean(node_height_sim, na.rm = TRUE),
+    .groups = "drop"
+  )
 
-#write.csv(scores_eq, "scores_eq_height_001.csv")
+
+#write.csv(scores_eq_bin, "scores_eq_bins_002.csv")
+
+```
+
+
+# per-run scores 
+
+```{r}
+
+scores_eq_runs <- scores_eq_bin %>%
+  group_by(model, pm, mu, mr, seed, gaia_target, costfunction) %>%
+  summarise(mean_pbin = mean(pbin, na.rm = TRUE), .groups = "drop")
+
+
+#write.csv(scores_eq_runs, "scores_eq_runs_002.csv")
+
 ```
 
 
