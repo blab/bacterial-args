@@ -4,7 +4,7 @@
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-load libraries
+## load libraries
 ```{r}
 library(gaia)
 library(tidyr)
@@ -21,12 +21,12 @@ library(purrr)
 library(scales)
 ```
 
-set work dir
+## set work dir
 ```{r}
 setwd("/home/nahmed/git/bacterial-args/migration/sweep_height_long/")
 ```
 
-ggplot theme
+## ggplot theme
 ```{r}
 ## ggplot theme
 
@@ -43,7 +43,7 @@ my_theme <- function() {
 options(repr.plot.width=14, repr.plot.height=8)
 ```
 
-read in scores df
+## read in scores df
 ```{r}
 scores_eq_pairs <- read.csv("scores_eq_pairs_003.csv")
 scores_eq_pairs <- scores_eq_pairs %>% mutate(node_height_sim = node_time) %>% mutate(gaia_target = recode(gaia_target, "inf" = "inferred", "sim" = "simulated"))
@@ -54,12 +54,14 @@ scores_eq_pairs$mr <- factor(scores_eq_pairs$mr,
 scores_eq_pairs$pm <- factor(scores_eq_pairs$pm, 
                                       levels=c(.00100,0.07575,0.15050, 0.22530, 0.30000), 
                                       labels = c(".001", ".076", ".151", ".226", "0.3" ) )
+
 #write.csv(scores_eq_pairs, "scores_eq_pairs_004.csv")
 
 ```
 
 
-# extract root height by finding max node_height per-bin 
+## extract root height by finding max node_height per-bin 
+later: crude scoring of runs according to root labeling accuracy 
 ```{r}
 roots <- scores_eq_pairs %>% group_by(bin, mr, mu, pm, seed, gaia_target) %>% summarise(root_height = max(node_height_sim, na.rm = TRUE)) %>% select(-bin)
 
@@ -79,34 +81,19 @@ scores_eq_pairs %>% group_by(pm, mr, node_height_sim, gaia_target) %>% summarise
                     geom_hline(yintercept = .80, color = "grey") + geom_hline(yintercept = .50, linetype = "dashed", color = "grey") +
                     scale_color_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) + 
                     theme_classic() + theme(legend.position = "none")
+
+ggsave("accuracy_nodeheight_5x5.png")
 ```
 
 
-# select specific p/m mu mr run(s)
+## select specific p/m mu mr run(s)
 ```{r}
 
 scores_eq_pairs %>% filter((pm == '.001') & (mr == '1e-5')) %>% select(seed) %>% unique() 
 
 ```
 
-
-
-```{r}
-
-scores_eq_pairs %>% filter((pm == '.001') & (mr == '1e-5')  & (seed == 140) & (gaia_target == 'simulated')) %>% 
-        ggplot(aes(x=node_height_sim, y=score, color=gaia_target)) + 
-                    geom_point(alpha = 0.05, color = 'black') + 
-                    #facet_wrap(~mr) + 
-                    labs(x="node_depth", y="accuracy", color="gaia target") + 
-                    scale_x_log10() + 
-                    geom_hline(yintercept = .80, color = "grey") + geom_hline(yintercept = .50, linetype = "dashed", color = "grey") +
-                   # scale_color_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) + 
-                    theme_classic() 
-
-```
-
-
-# simple [logistic regression](https://koalaverse.github.io/homlr/notebooks/05-logistic-regression.nb.html)
+## EX. simple [logistic regression](https://koalaverse.github.io/homlr/notebooks/05-logistic-regression.nb.html)
 ```{r}
 
 attrition <- modeldata::attrition
@@ -115,7 +102,7 @@ df <- attrition %>% mutate_if(is.ordered, factor, ordered = FALSE)
 churn_split <- initial_split(df, prop = .7, strata = "Attrition")
 churn_train <- training(churn_split)
 
-model1 <- glm(Attrition ~ MonthlyIncome, family = "binomial", data = churn_train)
+#model1 <- glm(Attrition ~ MonthlyIncome, family = "binomial", data = churn_train)
 model2 <- glm(Attrition ~ OverTime, family = "binomial", data = churn_train)
 
 churn_train2 <- churn_train %>% mutate(prob = ifelse(Attrition == "Yes", 1, 0))
@@ -129,9 +116,28 @@ ggplot(churn_train2, aes(MonthlyIncome, prob)) +
   ylab("Probability of Attrition")
 
 
+tidy(model2)
+as.data.frame(exp(coef(model2)))
+as.data.frame(confint(model2))
+
 ```
 
-# apply to single run for particular pm and mr
+# 01
+### apply to single run for particular pm and mr:
+```{r}
+
+scores_eq_pairs %>% filter((pm == '.001') & (mr == '1e-5')  & (seed == 140) & (gaia_target == 'simulated')) %>% 
+        ggplot(aes(x=node_height_sim, y=score, color=gaia_target)) + 
+                    geom_point(alpha = 0.05, color = 'black') + 
+                    #facet_wrap(~mr) + 
+                    labs(x="node_depth", y="accuracy", color="gaia target") + 
+                    scale_x_log10() + 
+                    geom_hline(yintercept = .80, color = "grey") + geom_hline(yintercept = .50, linetype = "dashed", color = "grey") +
+                   # scale_color_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) + 
+                    theme_classic() 
+
+```
+### lowest pm, lowest migration strength 
 ```{r}
 
 run <- scores_eq_pairs %>% filter((pm == '.001') & (mr == '1e-5')  & (seed == 140) & (gaia_target == 'simulated'))
@@ -150,12 +156,12 @@ run2 %>%
                     my_theme() 
 
 tidy(model1) # ridiculously high standard error, model does not converge, etc. 
-exp(coef(model1))
-confint(model1)
+as.data.frame(exp(coef(model1)))
+as.data.frame(confint(model1))
 
 ```
 
-# apply to all runs for particular pm and mr 
+### apply to all runs for particular pm and mr 
 ```{r}
 
 run <- scores_eq_pairs %>% filter((pm == '.001') & (mr == '1e-5') & (gaia_target == 'simulated'))
@@ -174,12 +180,18 @@ run2 %>%
                     my_theme()
 
 tidy(model1)
+as.data.frame(exp(coef(model1)))
+as.data.frame(confint(model1))
 
 ```
-# apply to all runs for particular pm and mr 
+# 02
+### slightly increasing p/m and migration strength 
+
+#### single run 
+converges fine and doesn't have ridiculous se -- *what's the difference between this and the prior single networks?* that predictor and response are basically perfectly correlated - after a certain node_height threshold, every score value is 0. 
 ```{r}
 
-run <- scores_eq_pairs %>% filter((pm == '.001') & (mr == '1e-5') & (gaia_target == 'simulated'))
+run <- scores_eq_pairs %>% filter((pm == '.076') & (mr == '1.25e-3') & (gaia_target == 'simulated') & (seed == 45) )
 model1 <- glm(score ~ node_height_sim, family = "binomial", data = run)
 run2 <- broom::augment(model1, run) %>% mutate(.fitted = exp(.fitted))
 
@@ -195,6 +207,158 @@ run2 %>%
                     my_theme()
 
 tidy(model1)
+as.data.frame(exp(coef(model1)))
+as.data.frame(confint(model1))
+
+```
+
+#### all runs
+```{r}
+
+run <- scores_eq_pairs %>% filter((pm == '.076') & (mr == '1.25e-3') & (gaia_target == 'simulated'))
+model1 <- glm(score ~ node_height_sim, family = "binomial", data = run)
+run2 <- broom::augment(model1, run) %>% mutate(.fitted = exp(.fitted))
+
+run2 %>% 
+        ggplot(aes(x=node_height_sim, y=score)) + 
+                    geom_point(alpha = 0.15) + 
+                    geom_smooth(method = "glm", method.args = list(family = "binomial")) +
+                    #facet_wrap(~mr) + 
+                    labs(x="node_depth", y="accuracy", color="gaia target") + 
+                    scale_x_log10() + 
+                    geom_hline(yintercept = .80, color = "grey") + geom_hline(yintercept = .50, linetype = "dashed", color = "grey") +
+                    #scale_color_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) + 
+                    my_theme()
+
+tidy(model1)
+as.data.frame(exp(coef(model1)))
+as.data.frame(confint(model1))
+
+```
+# 03
+### slightly increasing p/m and migration strength 
+
+#### single run 
+converges fine and doesn't have ridiculous se -- *what's the difference between this and the prior single networks?* that predictor and response are basically perfectly correlated - after a certain node_height threshold, every score value is 0. 
+```{r}
+
+run <- scores_eq_pairs %>% filter((pm == '.151') & (mr == '2.5e-3') & (gaia_target == 'simulated') & (seed == 76) )
+model1 <- glm(score ~ node_height_sim, family = "binomial", data = run)
+run2 <- broom::augment(model1, run) %>% mutate(.fitted = exp(.fitted))
+
+run2 %>% 
+        ggplot(aes(x=node_height_sim, y=score)) + 
+                    geom_point(alpha = 0.15) + 
+                    geom_smooth(method = "glm", method.args = list(family = "binomial")) +
+                    #facet_wrap(~mr) + 
+                    labs(x="node_depth", y="accuracy", color="gaia target") + 
+                    scale_x_log10() + 
+                    geom_hline(yintercept = .80, color = "grey") + geom_hline(yintercept = .50, linetype = "dashed", color = "grey") +
+                    #scale_color_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) + 
+                    my_theme()
+
+tidy(model1)
+as.data.frame(exp(coef(model1)))
+as.data.frame(confint(model1))
+
+```
+
+#### all runs
+```{r}
+
+run <- scores_eq_pairs %>% filter((pm == '.151') & (mr == '2.5e-3') & (gaia_target == 'simulated'))
+model1 <- glm(score ~ node_height_sim, family = "binomial", data = run)
+run2 <- broom::augment(model1, run) %>% mutate(.fitted = exp(.fitted))
+
+run2 %>% 
+        ggplot(aes(x=node_height_sim, y=score)) + 
+                    geom_point(alpha = 0.15) + 
+                    geom_smooth(method = "glm", method.args = list(family = "binomial")) +
+                    #facet_wrap(~mr) + 
+                    labs(x="node_depth", y="accuracy", color="gaia target") + 
+                    scale_x_log10() + 
+                    geom_hline(yintercept = .80, color = "grey") + geom_hline(yintercept = .50, linetype = "dashed", color = "grey") +
+                    #scale_color_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) + 
+                    my_theme()
+
+tidy(model1)
+as.data.frame(exp(coef(model1)))
+as.data.frame(confint(model1))
+
+```
+
+# multi plot
+
+```{r}
+#library(gridExtra)
+
+pms <- unique(scores_eq_pairs$pm)
+mrs <- unique(scores_eq_pairs$mr)
+
+plot_list <- list() 
+
+#par(mfrow = c(3, 2))
+for (i in 1:length(pms)) {
+  
+  run <- scores_eq_pairs %>% filter((pm == pms[i]) & (mr == mrs[i]) & (gaia_target == 'simulated'))
+  model1 <- glm(score ~ node_height_sim, family = "binomial", data = run)
+  run2 <- broom::augment(model1, run) %>% mutate(.fitted = exp(.fitted))
+  
+  p <- run2 %>% 
+          ggplot(aes(x=node_height_sim, y=score)) + 
+                      geom_point(alpha = 0.15) + 
+                      geom_smooth(method = "glm", method.args = list(family = "binomial")) +
+                      #facet_wrap(~mr) + 
+                      labs(x="node_depth", y="accuracy", color="gaia target") + 
+                      scale_x_log10() + 
+                      geom_hline(yintercept = .80, color = "grey") + geom_hline(yintercept = .50, linetype = "dashed", color = "grey") +
+                      #scale_color_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) + 
+                      theme_classic() + ggtitle(paste0("p/m: ", pms[i], ", mr: ", mrs[i]))
+  
+  plot_list[[i]] <- p
+}
+
+do.call(grid.arrange, c(plot_list, nrow = 2, ncol = 3  ))
+
+```
+```{r}
+
+plot_list_all <- list() 
+count <- 1
+
+for (i in 1:length(pms)) {
+  for (j in 1:length(mrs)) {
+  
+    run <- scores_eq_pairs %>% filter((pm == pms[i]) & (mr == mrs[j]) & (gaia_target == 'simulated')) 
+    seed <- sample(unique(run$seed), 1)
+    run <- run %>% filter(seed == seed)
+    model1 <- glm(score ~ node_height_sim, family = "binomial", data = run)
+    run2 <- broom::augment(model1, run) %>% mutate(.fitted = exp(.fitted))
+    
+    
+    p <- run2 %>% ggplot(aes(x=node_height_sim, y=score)) + 
+                        geom_point(alpha = 0.15) + 
+                        geom_smooth(method = "glm", method.args = list(family = "binomial")) +
+                        #facet_wrap(~mr) + 
+                        labs(x="node_depth", y="accuracy", color="gaia target") + 
+                        scale_x_log10() + 
+                        geom_hline(yintercept = .80, color = "grey") + geom_hline(yintercept = .50, linetype = "dashed", color = "grey") +
+                        #scale_color_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) + 
+                        theme_classic() + 
+                        ggtitle(paste0("p/m: ", pms[i], ", mr: ", mrs[j], ", seed: ", seed)) + 
+                        theme(plot.title = element_text(size = 8),
+                              plot.subtitle = element_text(size = 8), 
+                              axis.title = element_text(size = 8),
+                              axis.text = element_text(size = 6))
+    
+    plot_list_all[[count]] <- p
+    count <- count + 1
+    
+  }
+}
+
+do.call(grid.arrange, c(plot_list_all, nrow = 5, ncol = 5))
+#ggsave('logistic_all.png', width = 12, height = 12)
 
 ```
 
