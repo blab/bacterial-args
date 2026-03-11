@@ -11,7 +11,7 @@ library(tidyr)
 library(dplyr)
 library(data.table)
 library(ggplot2)
-#library(tidyverse)
+library(tidyverse)
 library(lubridate)
 library(ggplot2)
 library(RColorBrewer)
@@ -182,10 +182,10 @@ mpr_reps <- function(ts, sample_locations, cost_mat, nodes, nrep) {
 score_reps <- function(sim_locations_path, inf_locations_path, mpr_reps_output) {
   loc_sim <- read.csv(sim_locations_path) %>%
     mutate(mrca_population = as.integer(str_extract(mrca_population, "[0-9]+")) + 1L) %>%
-    select(sample_a, sample_b, bin, position, mrca_population, node_height_sim)
+    select(sample_a, sample_b, bin, position, mrca_population, node_height_sim) 
 
   loc_inf <- read.csv(inf_locations_path) %>%
-    select(sample_a, sample_b, bin, position, node, node_height_inf)
+    select(sample_a, sample_b, bin, position, node)#, node_height_inf)
 
   loc_sim %>%
     left_join(loc_inf, by=c("sample_a","sample_b","bin","position")) %>%
@@ -207,7 +207,7 @@ score_reps <- function(sim_locations_path, inf_locations_path, mpr_reps_output) 
 score_reps_sim_only <- function(sim_locations_path, mpr_reps_output) {
   loc <- read.csv(sim_locations_path) %>%
     mutate(mrca_population = as.integer(str_extract(mrca_population, "[0-9]+")) + 1L) %>%
-    select(sample_a, sample_b, bin, position, node, node_height_sim, mrca_population)
+    select(sample_a, sample_b, bin, position, node,mrca_population)#, node_height_sim)
 
   loc %>%
     left_join(mpr_reps_output, by = "node") %>%
@@ -319,10 +319,14 @@ scores_sim_eq <- pmap_dfr(runs, function(model, mu, mr, pm, seed, sim_trees, inf
 
 
 scores_eq_pairs <- bind_rows(scores_inf_eq, scores_sim_eq)
-#write.csv(scores_eq_pairs, "scores_eq_pairs_002.csv")
-
 ```
 
+```{r}
+
+scores_eq_pairs <- scores_eq_pairs %>% filter(!is.na(node))
+
+# write.csv(scores_eq_pairs, "scores_eq_pairs_003.csv")
+```
 
 # per-bin scores 
 ```{r}
@@ -356,15 +360,4 @@ scores_eq_runs <- scores_eq_bin %>%
 ```
 
 
-
-```{r}
-test <- get_scores_one_run(
-      ts_sim_path  = "trees/sim_ss_mu1.000e-10_pm1.000e-3_mr1.000e-5_seed140.trees",
-      ts_inf_path  = "trees/inf_ss_mu1.000e-10_pm1.000e-3_mr1.000e-5_seed140.trees",
-      loc_sim_path = "locations/sim_ss_mu1.000e-10_pm1.000e-3_mr1.000e-5_seed140.csv",
-      loc_inf_path = "locations/inf_ss_mu1.000e-10_pm1.000e-3_mr1.000e-5_seed140.csv",
-      cost_mat     = eq_cost_mat,
-      nreps        = 5
-    )
-```
 
