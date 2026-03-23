@@ -1,0 +1,191 @@
+---
+title: "plot clades gaia"
+output: html_document
+date: "2026-03-19"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+load libraries
+```{r}
+#library(gaia)
+library(tidyr)
+library(dplyr)
+library(data.table)
+library(ggplot2)
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(RColorBrewer)
+library(viridis)
+library(stringr)
+library(purrr)
+library(scales)
+library(gridExtra)
+library(rsample)
+```
+
+ggplot theme
+```{r}
+## ggplot theme
+
+my_theme <- function() {
+    theme_classic() +
+    theme( 
+        plot.title = element_text(color="black", size=12, face="bold"),
+        axis.title.x = element_text(color="black", size=20, face="bold", vjust=2),
+        axis.title.y = element_text(color="black", size=20, face="bold", vjust=2),
+        axis.text=element_text(size=24),
+        )
+}
+
+options(repr.plot.width=14, repr.plot.height=8)
+```
+
+```{r}
+clade_scores <- read.csv("clade_scores_001.csv")
+
+## filter out the pm 0.01 x mr 1e-4 actually ...
+### clade_scores <- clade_scores %>% filter(!mr == "1e-4") %>% filter(!pm == "0.01")
+
+clade_scores$mr <- factor(clade_scores$mr, 
+                                      levels=c( 0.000010, 0.000100, 0.001258, 0.002505, 0.003753, 0.005000), 
+                                      labels = c( "1e-5", "1e-4","1.25e-3", "2.5e-3", "3.75e-3", "5e-3" ) )
+clade_scores$pm <- factor(clade_scores$pm, 
+                                      levels=c(0.00100, 0.07575, 0.10000, 0.15050, 0.22530, 0.30000), 
+                                      labels = c(".001", ".076", "0.01", ".151", ".226", "0.3" ) )
+```
+
+
+# plot node_height by node_height_inf
+```{r, fig.width = 12, fig.height = 8}
+
+clade_scores %>% filter(gaia_target == 'inferred') %>% ggplot(aes(x = node_height_inf, y = node_height, color = seed)) + 
+                        geom_point() + 
+                        theme_classic() + 
+                        facet_wrap(pm~mr) +
+                        geom_abline(intercept = 0, slope = 1, color = "grey", linetype = "dashed", linewidth = 1) +
+                        scale_x_log10() + scale_y_log10() + 
+                        ylab("true") + xlab("inferred") + ggtitle("clade height")
+                      
+
+```
+
+# plot accuracy x nodeheight across pm and mr 
+```{r, fig.width = 12, fig.height = 8}
+
+clade_scores %>% group_by(node_height, gaia_target, pm, mr) %>% summarise(score = mean(score)) %>% ungroup() %>% ggplot(aes(x=node_height, y=score, color=gaia_target)) +
+                    geom_point(alpha = 0.5) +
+                    facet_wrap(pm~mr) +
+                    #facet_wrap(~mr) +
+                    labs(x="node_depth", y="accuracy", color="gaia target") +
+                    scale_x_log10() +
+                    geom_hline(yintercept = .80, color = "grey") + geom_hline(yintercept = .50, linetype = "dashed", color = "grey") +
+                    scale_color_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) +
+                    theme_classic() #+ theme(legend.position = "none")
+
+```
+# do logistic stuff too
+```{r}
+
+runw <- clade_scores %>% filter((pm == '0.07575') & (mr == '1.25e-3') & (gaia_target == 'simulated') & (seed == 45) )
+model1 <- glm(score ~ node_height, family = "binomial", data = runw)
+
+#max(runw$node_height)
+
+runw_pred <- tibble(node_height = seq(0.5, max(runw$node_height)), 50) ## supply a grid of node_depths, predict accuracies for them 
+runw_pred$score_pred <- predict(object = model1, newdata = runw_pred, type = "response")
+runw2 <- broom::augment(model1, runw) %>% mutate(.fitted = exp(.fitted))
+
+runw2 %>% 
+  ggplot(aes(x = node_height, y = score)) + 
+  geom_smooth(method = "glm", method.args = list(family = "binomial"),  se = FALSE, linewidth = 2, color = 'lightblue') + 
+  geom_point() + 
+  geom_line(data = runw_pred, aes(y = score_pred), linewidth = 1) + 
+  scale_x_log10() + geom_hline(yintercept = .80, color = "grey") + 
+  geom_hline(yintercept = .50, linetype = "dashed", color = "grey") +
+  my_theme() + xlab('node depth') + ylab('accuracy') 
+
+
+
+runw2 %>% 
+  ggplot(aes(x = node_height, fill = as.factor(score))) + geom_histogram(position = 'stack', binwidth = 0.1) + scale_x_log10() + theme_classic() + 
+            xlab("node depth") + ylab('count') + scale_fill_manual(values = c('grey', 'black')) 
+
+```
+
+```{r}
+runw <- clade_scores %>% filter((pm == '0.07575') & (mr == '1.25e-3') & (gaia_target == 'simulated') & (seed == 45) )
+model1 <- glm(score ~ log10(node_height), family = "binomial", data = runw)
+runw_pred <- tibble(node_height = seq(min(runw$node_height), max(runw$node_height), 50)) ## supply a grid of node_depths, predict accuracies for them 
+runw_pred$score_pred <- predict(object = model1, newdata = runw_pred, type = "response")
+runw2 <- broom::augment(model1, runw) %>% mutate(.fitted = exp(.fitted))
+
+runw2 %>% 
+  ggplot(aes(x = node_height, y = score)) + 
+  geom_smooth(method = "glm", method.args = list(family = "binomial"),  se = FALSE, linewidth = 2.2, color = 'lightblue') + 
+  geom_point() + 
+  geom_line(data = runw_pred, aes(y = score_pred), linewidth = 1) + 
+  scale_x_log10() + geom_hline(yintercept = .80, color = "grey") + 
+  geom_hline(yintercept = .50, linetype = "dashed", color = "grey") +
+  my_theme() + xlab('node depth') + ylab('accuracy') + ggtitle('y~log(x)')
+```
+
+function to apply to all simulations 
+```{r}
+
+runw <- clade_scores %>% filter((pm == '0.07575') & (mr == '1.25e-3') & (gaia_target == 'simulated') & (seed == 45) )
+model1 <- glm(score ~ log10(node_height), family = "binomial", data = runw)
+runw_pred <- tibble(node_height = seq(min(runw$node_height), max(runw$node_height), 50)) ## supply a grid of node_depths, predict accuracies for them 
+runw_pred$score_pred <- predict(object = model1, newdata = runw_pred, type = "response")
+runw2 <- broom::augment(model1, runw) %>% mutate(.fitted = exp(.fitted))
+
+
+
+```
+
+```{r}
+
+grouped_runs <- clade_scores %>% group_by(pm, mr, seed, gaia_target) 
+
+
+
+
+grouped_runs %>% mutate(model = glm(score ~ log10(node_height), family = "binomial")) %>% 
+                 mutate(node_height = seq(min(node_height), max(node_height)), 50) %>%
+                 mutate(score_pred = predict(object = model, newdata = node_height, type = "response"))
+
+
+
+run_summary <- function(grouped_rows) {
+  run = grouped_rows  
+  model = glm(score ~ log10(node_height), family = "binomial"))
+  pred = tibble(node_height = eq(min(runw$node_height), max(runw$node_height),50))
+  pred$score_pred = predict(object = model, newdata = node_height, type = "response"))
+  run = broom::augment(model, run) %>% mutate(.fitted = exp(.fitted))
+  return(run)
+}
+
+apply(grouped_runs, X, run_summary, ...)
+
+# return df with cols:  
+# uncertainty, lower and upper bounds ; predicted score, upper bound, lower bound, pm, mr, target  
+# find first node depth for which accuracy drops below 80% -- get uncertainty, find the node depth for which lower bound of accuracy dips below 80
+
+predict(model1, )
+## function to return r2, intercept, slope .... predict df, params, etc. --  loop over every set of inputs 
+
+log10(node_height_sim) # try fitting model on log scale node_height data
+
+
+```
+
+# do nicola recs (prolly requires gubbins control -- try for at least 2-3 scenarios)
+```{r}
+
+```
+
+
+
