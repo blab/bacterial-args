@@ -1,0 +1,662 @@
+---
+title: "plot clades gaia"
+output: html_document
+date: "2026-03-19"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+load libraries
+```{r}
+#library(gaia)
+library(tidyr)
+library(dplyr)
+library(data.table)
+library(ggplot2)
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(RColorBrewer)
+library(viridis)
+library(stringr)
+library(purrr)
+library(scales)
+library(gridExtra)
+library(rsample)
+
+library(broom)
+library(tibble)
+
+```
+
+ggplot theme
+```{r}
+## ggplot theme
+
+my_theme <- function() {
+    theme_classic() +
+    theme( 
+        plot.title = element_text(color="black", size=12, face="bold"),
+        axis.title.x = element_text(color="black", size=20, face="bold", vjust=2),
+        axis.title.y = element_text(color="black", size=20, face="bold", vjust=2),
+        axis.text=element_text(size=24),
+        )
+}
+
+options(repr.plot.width=14, repr.plot.height=8)
+```
+
+```{r}
+clade_scores <- read.csv("clade_scores_001.csv")
+
+## filter out the pm 0.01 x mr 1e-4 actually ...
+### clade_scores <- clade_scores %>% filter(!mr == "1e-4") %>% filter(!pm == "0.01")
+
+clade_scores$mr <- factor(clade_scores$mr, 
+                                      levels=c( 0.000010, 0.000100, 0.001258, 0.002505, 0.003753, 0.005000), 
+                                      labels = c( "1e-5", "1e-4","1.25e-3", "2.5e-3", "3.75e-3", "5e-3" ) )
+clade_scores$pm <- factor(clade_scores$pm, 
+                                      levels=c(0.00100, 0.07575, 0.10000, 0.15050, 0.22530, 0.30000), 
+                                      labels = c(".001", ".076", "0.01", ".151", ".226", "0.3" ) )
+```
+
+
+# plot node_height by node_height_inf
+```{r, fig.width = 12, fig.height = 8}
+
+clade_scores %>% filter(gaia_target == 'inferred') %>% ggplot(aes(x = node_height_inf, y = node_height, color = seed)) + 
+                        geom_point() + 
+                        theme_classic() + 
+                        facet_wrap(pm~mr) +
+                        geom_abline(intercept = 0, slope = 1, color = "grey", linetype = "dashed", linewidth = 1) +
+                        scale_x_log10() + scale_y_log10() + 
+                        ylab("true") + xlab("inferred") + ggtitle("clade height")
+                      
+
+```
+# proportion of clades accurately reconstructed 
+```{r, fig.width = 12}
+
+matches <- clade_scores %>% filter(gaia_target == 'inferred') %>% group_by(seed, pm, mr, mu) %>% summarize(proportion_reconstructed = mean(match))
+
+
+
+matches %>% ggplot(aes(x = proportion_reconstructed)) + 
+                        geom_histogram(binwidth = 0.01) + 
+                        theme_classic() 
+
+matches %>% ggplot(aes(x = proportion_reconstructed)) + 
+                        geom_histogram(binwidth = 0.01) + 
+                        theme_classic() + geom_vline(xintercept = 0.8, color = 'blue', linetype = 'dashed') + 
+                        facet_wrap(~as.factor(mu), nrow = 1) +
+                        #facet_wrap(pm~mr) +
+                       # geom_abline(intercept = 0, slope = 1, color = "grey", linetype = "dashed", linewidth = 1) +
+                      #  scale_x_log10() + scale_y_log10() + 
+                        xlab("proportion of clades reconstructed during inference") #+ xlab("inferred") + ggtitle("clade height")
+
+matches %>% ggplot(aes(x = proportion_reconstructed)) + 
+                        geom_histogram(binwidth = 0.01) + 
+                        theme_classic() + geom_vline(xintercept = 0.8, color = 'blue', linetype = 'dashed') + 
+                        facet_wrap(pm~as.factor(mu)) +
+                        #facet_wrap(pm~mr) +
+                       # geom_abline(intercept = 0, slope = 1, color = "grey", linetype = "dashed", linewidth = 1) +
+                      #  scale_x_log10() + scale_y_log10() + 
+                        xlab("proportion of clades reconstructed during inference") #+ xlab("inferred") + ggtitle("clade height")
+                      
+
+```
+
+# clade reconstruction across genomic positions 
+```{r, fig.width = 12, fig.height = 8}
+
+bin_matches <- clade_scores %>% filter(gaia_target == 'inferred') %>% group_by(pm, mu, bin, position) %>% summarize(proportion_reconstructed = mean(match))
+
+mus = unique(bin_matches$mu)
+
+plot_list <- list() 
+
+for (i in 1:length(pms)) {
+  
+  run <- bin_matches %>% ungroup() %>% filter((pm == pms[i]) & (mu == mus[i]))
+  #s <- sample(unique(run$seed), 1)
+  #run <- run %>% filter(seed == s)
+
+  p <- run %>% 
+          ggplot(aes(y = proportion_reconstructed, x = position)) + 
+                        geom_point(color = seed) + 
+                        geom_hline(yintercept = .80, color = "grey") + geom_hline(yintercept = .50, linetype = "dashed", color = "grey") +
+                        #scale_color_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) + 
+                        theme_classic() + ggtitle(paste0("p/m: ", pms[i], ", mu: ", mus[i]))
+  
+  plot_list[[i]] <- p
+}
+
+do.call(grid.arrange, c(plot_list, nrow = 2, ncol = 3  ))
+
+```
+
+
+# plot accuracy x nodeheight across pm and mr 
+```{r, fig.width = 12, fig.height = 8}
+
+clade_scores %>% group_by(node_height, gaia_target, pm, mr) %>% summarise(score = mean(score)) %>% ungroup() %>% ggplot(aes(x=node_height, y=score, color=gaia_target)) +
+                    geom_point(alpha = 0.5) +
+                    facet_wrap(pm~mr) +
+                    #facet_wrap(~mr) +
+                    labs(x="node_depth", y="accuracy", color="gaia target") +
+                    scale_x_log10() +
+                    geom_hline(yintercept = .80, color = "grey") + geom_hline(yintercept = .50, linetype = "dashed", color = "grey") +
+                    scale_color_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) +
+                    theme_classic() #+ theme(legend.position = "none")
+
+```
+
+
+
+
+# do logistic stuff too
+```{r}
+
+runw <- clade_scores %>% filter((pm == '0.07575') & (mr == '1.25e-3') & (gaia_target == 'simulated') & (seed == 45) )
+model1 <- glm(score ~ node_height, family = "binomial", data = runw)
+
+#max(runw$node_height)
+
+runw_pred <- tibble(node_height = seq(0.5, max(runw$node_height)), 50) ## supply a grid of node_depths, predict accuracies for them 
+runw_pred$score_pred <- predict(object = model1, newdata = runw_pred, type = "response")
+runw2 <- broom::augment(model1, runw) %>% mutate(.fitted = exp(.fitted))
+
+runw2 %>% 
+  ggplot(aes(x = node_height, y = score)) + 
+  geom_smooth(method = "glm", method.args = list(family = "binomial"),  se = FALSE, linewidth = 2, color = 'lightblue') + 
+  geom_point() + 
+  geom_line(data = runw_pred, aes(y = score_pred), linewidth = 1) + 
+  scale_x_log10() + geom_hline(yintercept = .80, color = "grey") + 
+  geom_hline(yintercept = .50, linetype = "dashed", color = "grey") +
+  my_theme() + xlab('node depth') + ylab('accuracy') 
+
+
+
+runw2 %>% 
+  ggplot(aes(x = node_height, fill = as.factor(score))) + geom_histogram(position = 'stack', binwidth = 0.1) + scale_x_log10() + theme_classic() + 
+            xlab("node depth") + ylab('count') + scale_fill_manual(values = c('grey', 'black')) 
+
+```
+
+
+function to apply to all simulations 
+```{r}
+
+runw <- clade_scores %>% filter((pm == '0.07575') & (mr == '1.25e-3') & (gaia_target == 'simulated') & (seed == 45) )
+model1 <- glm(score ~ log10(node_height), family = "binomial", data = runw)
+runw_pred <- tibble(node_height = seq(min(runw$node_height), max(runw$node_height), 50)) ## supply a grid of node_depths, predict accuracies for them 
+runw_pred$score_pred <- predict(object = model1, newdata = runw_pred, type = "response")
+runw2 <- broom::augment(model1, runw) %>% mutate(probability = plogis(.fitted))
+
+runw2 %>% 
+  ggplot(aes(x = node_height, y = score)) + 
+  geom_smooth(method = "glm", method.args = list(family = "binomial"),  se = FALSE, linewidth = 2.2, color = 'lightblue') + 
+  geom_point() + 
+  geom_line(aes(y = probability), linewidth = 1) + 
+  scale_x_log10() + geom_hline(yintercept = .80, color = "grey") + 
+  geom_hline(yintercept = .50, linetype = "dashed", color = "grey") +
+  my_theme() + xlab('node depth') + ylab('accuracy') + ggtitle('y~log(x)')
+
+
+```
+
+### get predicted scores for each node height using logistic regression 
+```{r}
+
+run_summary_grouped <- function(grouped_data, group_key) {
+  run <- grouped_data
+  model <- glm(score ~ log10(node_height), family = "binomial", data = run)
+  augmented_run <- broom::augment(model, run) %>% mutate(probability = plogis(.fitted))
+  return(augmented_run) 
+}
+
+result_df <- clade_scores %>% filter(match == 1) %>% 
+  group_by(pm, mr, seed, gaia_target) %>% 
+  group_modify(~run_summary_grouped(.x, .y)) 
+
+```
+
+### plot decay curves for a few situations 
+```{r}
+
+
+pms <- unique(clade_scores$pm)
+mrs <- unique(clade_scores$mr)
+
+plot_list <- list() 
+# 
+# result_df <- clade_scores %>% filter(match == 1) %>% 
+#   group_by(pm, mr, seed, gaia_target) %>% 
+#   group_modify(~run_summary_grouped(.x, .y)) 
+
+#par(mfrow = c(3, 2))
+for (i in 1:length(pms)) {
+  
+  run <- result_df %>% ungroup() %>% filter((pm == pms[i]) & (mr == mrs[i]) & (gaia_target == 'simulated'))
+  s <- sample(unique(run$seed), 1)
+  run <- run %>% filter(seed == s)
+  # model1 <- glm(score ~ node_height_sim, family = "binomial", data = run)
+  # run2 <- broom::augment(model1, run) %>% mutate(.fitted = exp(.fitted))
+  
+  p <- run %>% 
+          ggplot(aes(x=node_height, y=score)) + 
+                      geom_point(alpha = 0.15) + 
+                      geom_smooth(method = "glm", method.args = list(family = "binomial")) +
+                      geom_line(aes(y = probability), linewidth = 1) + 
+                      #facet_wrap(~mr) + 
+                      labs(x="node_depth", y="accuracy") + 
+                      scale_x_log10() + 
+                      geom_hline(yintercept = .80, color = "grey") + geom_hline(yintercept = .50, linetype = "dashed", color = "grey") +
+                      #scale_color_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) + 
+                      theme_classic() + ggtitle(paste0("p/m: ", pms[i], ", mr: ", mrs[i]))
+  
+  plot_list[[i]] <- p
+}
+
+do.call(grid.arrange, c(plot_list, nrow = 2, ncol = 3  ))
+
+```
+
+simulated - 1 per param situation 
+```{r, fig.width = 15, fig.height = 10}
+
+#clade_scores <- clade_scores %>% filter(!mr == "1e-4") %>% filter(!pm == "0.01")
+#pms <- unique(clade_scores$pm)
+#mrs <- unique(clade_scores$mr)
+
+plot_list <- list() 
+# 
+# result_df <- clade_scores %>% filter(match == 1) %>% 
+#   group_by(pm, mr, seed, gaia_target) %>% 
+#   group_modify(~run_summary_grouped(.x, .y)) 
+count <- 1
+#par(mfrow = c(3, 2))
+for (i in 1:length(pms)) {
+  for (j in 1:length(mrs)) {
+  
+  run <- result_df %>% ungroup() %>% filter((pm == pms[i]) & (mr == mrs[j]) & (gaia_target == 'simulated'))
+  s <- sample(unique(run$seed), 1)
+  run <- run %>% filter(seed == s)
+  # model1 <- glm(score ~ node_height_sim, family = "binomial", data = run)
+  # run2 <- broom::augment(model1, run) %>% mutate(.fitted = exp(.fitted))
+  
+  p <- run %>% 
+          ggplot(aes(x=node_height, y=score)) + 
+                      geom_point(alpha = 0.15) + 
+                      geom_smooth(method = "glm", method.args = list(family = "binomial")) +
+                      geom_line(aes(y = probability), linewidth = 1) + 
+                      #facet_wrap(~mr) + 
+                      labs(x="node_depth", y="accuracy") + 
+                      scale_x_log10() + 
+                      geom_hline(yintercept = .80, color = "grey") + geom_hline(yintercept = .50, linetype = "dashed", color = "grey") +
+                      #scale_color_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) + 
+                      theme_classic() + ggtitle(paste0("p/m: ", pms[i], ", mr: ", mrs[j]))
+  
+  plot_list[[count]] <- p
+  count <- count + 1
+  }
+}
+do.call(grid.arrange, c(plot_list, nrow = 5, ncol = 5 ))
+
+```
+# inferred-- 1 per param situation 
+```{r, fig.width = 15, fig.height = 10}
+
+#clade_scores <- clade_scores %>% filter(!mr == "1e-4") %>% filter(!pm == "0.01")
+pms <- sort(unique(clade_scores$pm))
+mrs <- sort(unique(clade_scores$mr))
+
+plot_list <- list() 
+# 
+# result_df <- clade_scores %>% filter(match == 1) %>% 
+#   group_by(pm, mr, seed, gaia_target) %>% 
+#   group_modify(~run_summary_grouped(.x, .y)) 
+count <- 1
+#par(mfrow = c(3, 2))
+for (i in 1:length(pms)) {
+  for (j in 1:length(mrs)) {
+  
+  run <- result_df %>% ungroup() %>% filter((pm == pms[i]) & (mr == mrs[j]) & (gaia_target == 'inferred') & (match == 1))
+  s <- sample(unique(run$seed), 1)
+  run <- run %>% filter(seed == s)
+  # model1 <- glm(score ~ node_height_sim, family = "binomial", data = run)
+  # run2 <- broom::augment(model1, run) %>% mutate(.fitted = exp(.fitted))
+  
+  p <- run %>% 
+          ggplot(aes(x=node_height, y=score)) + 
+                      geom_point(alpha = 0.15) + 
+                      geom_smooth(method = "glm", method.args = list(family = "binomial")) +
+                      geom_line(aes(y = probability), linewidth = 1) + 
+                      #facet_wrap(~mr) + 
+                      labs(x="node_depth", y="accuracy") + 
+                      scale_x_log10() + 
+                      geom_hline(yintercept = .80, color = "grey") + geom_hline(yintercept = .50, linetype = "dashed", color = "grey") +
+                      #scale_color_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) + 
+                      theme_classic() + ggtitle(paste0("p/m: ", pms[i], ", mr: ", mrs[j]))
+  
+  plot_list[[count]] <- p
+  count <- count + 1
+  }
+}
+do.call(grid.arrange, c(plot_list, nrow = 5, ncol = 5 ))
+
+```
+
+# both -- 1 per param situation 
+```{r, fig.width = 15, fig.height = 10}
+
+#clade_scores <- clade_scores %>% filter(!mr == "1e-4") %>% filter(!pm == "0.01")
+#pms <- unique(clade_scores$pm)
+#mrs <- unique(clade_scores$mr)
+
+plot_list <- list() 
+# 
+# result_df <- clade_scores %>% filter(match == 1) %>% 
+#   group_by(pm, mr, seed, gaia_target) %>% 
+#   group_modify(~run_summary_grouped(.x, .y)) 
+count <- 1
+#par(mfrow = c(3, 2))
+for (i in 1:length(pms)) {
+  for (j in 1:length(mrs)) {
+  
+  run <- result_df %>% ungroup() %>% filter((pm == pms[i]) & (mr == mrs[j]) & (match == 1))
+  s <- sample(unique(run$seed), 1)
+  run <- run %>% filter(seed == s)
+  # model1 <- glm(score ~ node_height_sim, family = "binomial", data = run)
+  # run2 <- broom::augment(model1, run) %>% mutate(.fitted = exp(.fitted))
+  
+  p <- run %>% 
+          ggplot(aes(x=node_height, y=score, color = gaia_target)) + 
+                      geom_point(alpha = 0.15, aes(color = gaia_target)) + 
+                      #geom_smooth(method = "glm", method.args = list(family = "binomial")) +
+                      geom_line(aes(y = probability), linewidth = 1) + 
+                      #facet_wrap(~mr) + 
+                      labs(x="node_depth", y="accuracy") + 
+                      scale_x_log10() + 
+                      geom_hline(yintercept = .80, color = "grey") + geom_hline(yintercept = .50, linetype = "dashed", color = "grey") +
+                      scale_color_manual(values = c("simulated" = "black", "inferred" = "#00A08A")) + 
+                      theme_classic() + ggtitle(paste0("p/m: ", pms[i], ", mr: ", mrs[j])) + theme(legend.position = 'none')
+  
+  plot_list[[count]] <- p
+  count <- count + 1
+  }
+}
+do.call(grid.arrange, c(plot_list, nrow = 5, ncol = 5 ))
+
+```
+
+
+
+## also get upper bound, lower bound, first node_height for which score drops below 80%; 
+get uncertainty, ie find the node height for which lower bound of score dips below 80
+
+```{r}
+run_summary_grouped <- function(grouped_data, group_key) {
+  # fit model 
+  model <- glm(score ~ log10(node_height), family = "binomial", data = grouped_data)
+  
+  # grid of node_heights
+  grid_heights <- seq(min(grouped_data$node_height), max(grouped_data$node_height) * 1.5, length.out = 5000)
+  grid_df <- data.frame(node_height = grid_heights)
+  
+  # predict scores on grid 
+  grid_preds <- predict(model, newdata = grid_df, type = "link", se.fit = TRUE)
+  
+  # calculate probabilities and confidence bounds for run
+  grid_df <- grid_df %>%
+    mutate(
+      probability  = plogis(grid_preds$fit),
+      lower_bound = plogis(grid_preds$fit - (1.96 * grid_preds$se.fit)),
+      upper_bound = plogis(grid_preds$fit + (1.96 * grid_preds$se.fit))
+    )
+  
+  # actual threshold where p crosses .80
+  #h_empirical <- run %>% filter(probability <= 0.80) %>% slice(1) %>% pull(node_height)
+
+  # find the first node height in the grid where each curve drops below 0.80
+  h_prob  <- grid_df$node_height[which(grid_df$probability <= 0.80)[1]]
+  h_lower <- grid_df$node_height[which(grid_df$lower_bound <= 0.80)[1]]
+  h_upper <- grid_df$node_height[which(grid_df$upper_bound <= 0.80)[1]]
+
+  # predict on actual run data
+  orig_preds <- predict(model, newdata = grouped_data, type = "link", se.fit = TRUE)
+  
+  # add the bounds from grid prediction to run df
+  grouped_data %>%
+    mutate(
+      probability = plogis(orig_preds$fit),
+      lower_bound = plogis(orig_preds$fit - (1.96 * orig_preds$se.fit)),
+      upper_bound = plogis(orig_preds$fit + (1.96 * orig_preds$se.fit)),
+      #empirical_node_height_at_80 = h_empirical,
+      mean_node_height_at_80  = h_prob,
+      lower_node_height_at_80 = h_lower,
+      upper_node_height_at_80 = h_upper
+    ) %>%
+    arrange(node_height)
+}
+
+result_df4 <- clade_scores %>%
+  filter(match == 1) %>%
+  group_by(pm, mr, seed, gaia_target) %>%
+  group_modify(~run_summary_grouped(.x, .y)) %>%
+  ungroup()
+
+
+result_df4
+
+```
+
+
+
+
+
+
+```{r}
+run <- result_df4 %>% ungroup() %>% filter((pm == pms[1]) & (mr == mrs[1]) & (gaia_target == 'simulated'))
+  s <- sample(unique(run$seed), 1)
+  run <- run %>% filter(seed == s)
+  # model1 <- glm(score ~ node_height_sim, family = "binomial", data = run)
+  # run2 <- broom::augment(model1, run) %>% mutate(.fitted = exp(.fitted))
+  
+  run %>% 
+          ggplot(aes(x=node_height, y=score)) + 
+                      #geom_point(alpha = 0.15) + 
+                      #geom_smooth(method = "glm", method.args = list(family = "binomial")) +
+                      geom_line(aes(y = probability), linewidth = 1) + 
+                      #facet_wrap(~mr) + 
+                      labs(x="node_depth", y="accuracy") + 
+                      scale_x_log10() + 
+                      geom_hline(yintercept = .80, color = "grey") + 
+                      #geom_hline(yintercept = .50, linetype = "dashed", color = "grey") +
+                      geom_vline(xintercept = unique(run$mean_node_height_at_80)) + 
+                      geom_rect(xmin = unique(run$lower_node_height_at_80), xmax = unique(run$upper_node_height_at_80), ymin = 0, ymax = 1, fill = 'blue') + 
+                      #scale_color_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) + 
+                      theme_classic() + ggtitle(paste0("p/m: ", pms[1], ", mr: ", mrs[1]))
+```
+
+
+
+node height threshold (sim)
+```{r, fig.width = 15, fig.height = 10}
+#pms <- unique(clade_scores$pm)
+#mrs <- unique(clade_scores$mr)
+
+plot_list <- list() 
+# 
+# result_df <- clade_scores %>% filter(match == 1) %>% 
+#   group_by(pm, mr, seed, gaia_target) %>% 
+#   group_modify(~run_summary_grouped(.x, .y)) 
+count <- 1
+#par(mfrow = c(3, 2))
+for (i in 1:length(pms)) {
+  for (j in 1:length(mrs)) {
+  
+  run <- result_df4 %>% ungroup() %>% filter((pm == pms[i]) & (mr == mrs[j]) & (gaia_target == 'simulated'))
+  s <- sample(unique(run$seed), 1)
+  run <- run %>% filter(seed == s)
+  # model1 <- glm(score ~ node_height_sim, family = "binomial", data = run)
+  # run2 <- broom::augment(model1, run) %>% mutate(.fitted = exp(.fitted))
+  
+  p <- run %>% 
+          ggplot(aes(x=node_height, y=score)) + 
+                      geom_point(alpha = 0.1) + 
+                      #geom_smooth(method = "glm", method.args = list(family = "binomial")) +
+                      geom_line(aes(y = probability), linewidth = 1) + 
+                      #facet_wrap(~mr) + 
+                      labs(x="node_depth", y="accuracy") + 
+                      scale_x_log10() + 
+                      geom_hline(yintercept = .80, color = "grey") + 
+                      #geom_hline(yintercept = .50, linetype = "dashed", color = "grey") +
+                      geom_vline(xintercept = unique(run$mean_node_height_at_80), color = 'lightblue') + #predicted
+                      #geom_vline(xintercept = unique(run$empirial_node_height_bound), linetype = 'dotted', color = 'grey') + #true
+                      geom_rect(xmin = unique(run$lower_node_height_at_80), # shading the confidence intervals) 
+                                xmax = unique(run$upper_node_height_at_80), 
+                                #alpha = 0.8, 
+                                ymin = 0, ymax = 1, 
+                                fill = 'blue') + 
+                      #scale_color_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) + 
+                      theme_classic() + ggtitle(paste0("p/m: ", pms[i], ", mr: ", mrs[j]))
+  
+  plot_list[[count]] <- p
+  count <- count + 1
+  }
+}
+
+#plot_list
+do.call(grid.arrange, c(plot_list, nrow = 5, ncol = 5 ))
+```
+
+node height threshold (sim + inf)
+```{r, fig.width = 15, fig.height = 10}
+#pms <- unique(clade_scores$pm)
+#mrs <- unique(clade_scores$mr)
+
+plot_list <- list() 
+# 
+# result_df <- clade_scores %>% filter(match == 1) %>% 
+#   group_by(pm, mr, seed, gaia_target) %>% 
+#   group_modify(~run_summary_grouped(.x, .y)) 
+count <- 1
+#par(mfrow = c(3, 2))
+for (i in 1:length(pms)) {
+  for (j in 1:length(mrs)) {
+  
+  run <- result_df4 %>% ungroup() %>% filter((pm == pms[i]) & (mr == mrs[j]) & (match == 1))
+  s <- sample(unique(run$seed), 1)
+  run <- run %>% filter(seed == s)
+  # model1 <- glm(score ~ node_height_sim, family = "binomial", data = run)
+  # run2 <- broom::augment(model1, run) %>% mutate(.fitted = exp(.fitted))
+  
+  p <- run %>% 
+          ggplot(aes(x=node_height, y=score, color = gaia_target)) + 
+                      geom_point(alpha = 0.1) + 
+                      #geom_smooth(method = "glm", method.args = list(family = "binomial")) +
+                      geom_line(aes(y = probability, color = gaia_target), linewidth = 1) + 
+                      #facet_wrap(~mr) + 
+                      labs(x="node_depth", y="accuracy") + 
+                      scale_x_log10() + 
+                      geom_hline(yintercept = .80, color = "grey") + 
+                      #geom_hline(yintercept = .50, linetype = "dashed", color = "grey") +
+                      geom_vline(aes(color = gaia_target), xintercept = unique(run$mean_node_height_at_80)) + #predicted
+                      #geom_vline(xintercept = unique(run$empirial_node_height_bound), linetype = 'dotted', color = 'grey') + #true
+                     # geom_rect(xmin = unique(run$lower_node_height_at_80), # shading the confidence intervals) 
+                    #            xmax = unique(run$upper_node_height_at_80), 
+                                #alpha = 0.8, 
+                    #            ymin = 0, ymax = 1, 
+                    #            fill = 'blue') + 
+                      scale_color_manual(values = c("simulated" = "black", "inferred" = "#00A08A")) + 
+                      theme_classic() + ggtitle(paste0("p/m: ", pms[i], ", mr: ", mrs[j])) + theme(legend.position = "none")
+  
+  plot_list[[count]] <- p
+  count <- count + 1
+  }
+}
+
+#plot_list
+do.call(grid.arrange, c(plot_list, nrow = 5, ncol = 5 ))
+
+
+```
+# plot node depth threshold (0.8) with increasing mr (or pm)
+```{r}
+result_df4
+
+plot_list <- list() 
+# 
+# result_df <- clade_scores %>% filter(match == 1) %>% 
+#   group_by(pm, mr, seed, gaia_target) %>% 
+#   group_modify(~run_summary_grouped(.x, .y)) 
+count <- 1
+#par(mfrow = c(3, 2))
+for (i in 1:length(pms)) {
+  for (j in 1:length(mrs)) {
+  
+  run <- result_df4 %>% ungroup() %>% filter((pm == pms[i]) & (mr == mrs[j]) & (match == 1))
+  s <- sample(unique(run$seed), 1)
+  run <- run %>% filter(seed == s)
+  # model1 <- glm(score ~ node_height_sim, family = "binomial", data = run)
+  # run2 <- broom::augment(model1, run) %>% mutate(.fitted = exp(.fitted))
+  
+  p <- run %>% 
+          ggplot(aes(x=node_height, y=score, color = gaia_target)) + 
+                      geom_point(alpha = 0.1) + 
+                      #geom_smooth(method = "glm", method.args = list(family = "binomial")) +
+                      geom_line(aes(y = probability, color = gaia_target), linewidth = 1) + 
+                      #facet_wrap(~mr) + 
+                      labs(x="node_depth", y="accuracy") + 
+                      scale_x_log10() + 
+                      geom_hline(yintercept = .80, color = "grey") + 
+                      #geom_hline(yintercept = .50, linetype = "dashed", color = "grey") +
+                      geom_vline(aes(color = gaia_target), xintercept = unique(run$mean_node_height_at_80)) + #predicted
+                      #geom_vline(xintercept = unique(run$empirial_node_height_bound), linetype = 'dotted', color = 'grey') + #true
+                     # geom_rect(xmin = unique(run$lower_node_height_at_80), # shading the confidence intervals) 
+                    #            xmax = unique(run$upper_node_height_at_80), 
+                                #alpha = 0.8, 
+                    #            ymin = 0, ymax = 1, 
+                    #            fill = 'blue') + 
+                      scale_color_manual(values = c("simulated" = "black", "inferred" = "#00A08A")) + 
+                      theme_classic() + ggtitle(paste0("p/m: ", pms[i], ", mr: ", mrs[j])) + theme(legend.position = "none")
+  
+  plot_list[[count]] <- p
+  count <- count + 1
+  }
+}
+
+#plot_list
+do.call(grid.arrange, c(plot_list, nrow = 5, ncol = 5 ))
+
+
+```
+
+
+```{r}
+result_df2
+```
+
+
+```{r}
+result_df2 %>% group_by(pm, mr, seed, gaia_target) %>% ggplot(aes(y = first_node_height_below_80_ci, x=mr)) + 
+                                                        geom_point(aes(color = gaia_target)) + 
+                                                        scale_color_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) + 
+                                                        theme_classic() + scale_y_log10()
+
+
+
+
+```
+
+
+# do nicola recs (prolly requires gubbins control -- try for at least 2-3 scenarios)
+```{r}
+
+```
+
+
+

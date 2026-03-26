@@ -156,6 +156,13 @@ jscores %>% group_by(pm, mr, seed) %>% summarise(count = n()) %>% groupby(pm, mr
 # length(list.files('../trees')) 1218 --> 608 total runs excluding test run 
 ```
 
+## extract root height by finding max node_height per-bin 
+later: crude scoring of runs according to root labeling accuracy 
+```{r}
+#roots <- jscores %>% group_by(bin, mr, mu, pm, seed, gaia_target) %>% summarise(root_height = max(node_height_sim, na.rm = TRUE, 
+#                                                                                 mean_score = ....)) 
+
+```
 
 
 # plot accuracy x nodeheight across pm and mr 
@@ -229,7 +236,7 @@ do.call(grid.arrange, c(plot_list, nrow = 2, ncol = 3  ))
 
 ```
 
-simulated - 1 per param situation (just geom_line fits)
+# simulated - 1 per param situation (just geom_line fits)
 ```{r, fig.width = 15, fig.height = 10}
 
 plot_list <- list() 
@@ -300,7 +307,6 @@ do.call(grid.arrange, c(plot_list, nrow = 5, ncol = 5 ))
 
 
 ## predict accuracy across grid of node heights. get upper bound, lower bound, node_height threshold for which score drops below 80%; 
-
 ```{r}
 run_summary_grouped <- function(grouped_data, group_key) {
   # fit model 
