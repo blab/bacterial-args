@@ -1,0 +1,371 @@
+# viz for gaia accuracy testing
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## load libraries
+```{r}
+library(gaia)
+library(tidyr)
+library(dplyr)
+library(data.table)
+library(ggplot2)
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(RColorBrewer)
+library(viridis)
+library(stringr)
+library(purrr)
+library(scales)
+```
+
+## set work dir
+```{r}
+setwd("/home/nahmed/git/bacterial-args/migration/sweep_height_long/")
+```
+
+## ggplot theme
+```{r}
+## ggplot theme
+
+my_theme <- function() {
+    theme_classic() +
+    theme( 
+        plot.title = element_text(color="black", size=12, face="bold"),
+        axis.title.x = element_text(color="black", size=20, face="bold", vjust=2),
+        axis.title.y = element_text(color="black", size=20, face="bold", vjust=2),
+        axis.text=element_text(size=24),
+        )
+}
+
+options(repr.plot.width=14, repr.plot.height=8)
+```
+
+## read in scores df
+```{r}
+pairs <- read.csv("scores_eq_pairs_003_downsample.csv")
+pairs <- scores_eq_pairs %>% mutate(node_height_sim = node_time) %>% mutate(gaia_target = recode(gaia_target, "inf" = "inferred", "sim" = "simulated"))
+pairs$gaia_target <- factor(pairs$gaia_target, levels = c("simulated", "inferred"))
+pairs$mr <- factor(pairs$mr, 
+                                      levels=c("1e-05","0.001258" ,"0.002505", "0.003753", "0.005"), 
+                                      labels = c("1e-5", "1.25e-3", "2.5e-3", "3.75e-3", "5e-3" ) )
+pairs$pm <- factor(pairs$pm, 
+                                      levels=c(.00100,0.07575,0.15050, 0.22530, 0.30000), 
+                                      labels = c(".001", ".076", ".151", ".226", "0.3" ) )
+
+#write.csv(scores_eq_pairs, "scores_eq_pairs_004.csv")
+
+```
+
+
+## extract root height by finding max node_height per-bin 
+later: crude scoring of runs according to root labeling accuracy 
+```{r}
+#roots <- pairs %>% group_by(bin, mr, mu, pm, seed, gaia_target) %>% summarise(root_height = max(node_height_sim, na.rm = TRUE)) %>% select(-bin)
+
+#roots <- roots %>% left_join(pairs, by = c('bin', 'mr', 'mu', 'pm', 'seed', 'gaia_target', "root_height" = "node_height_sim"))
+
+```
+
+
+# plot accuracy x nodeheight across pm and mr 
+```{r, fig.width = 12, fig.height = 8}
+pairs %>% group_by(pm, mr, node_height_sim, gaia_target) %>% summarise(score = mean(score, na.rm = TRUE)) %>% ungroup() %>% ggplot(aes(x=node_height_sim, y=score, color=gaia_target)) + 
+                    geom_point(alpha = 0.75) + 
+                    facet_wrap(pm~mr) + 
+                    #facet_wrap(~mr) + 
+                    labs(x="node_depth", y="accuracy", color="gaia target") + 
+                    scale_x_log10() + 
+                    geom_hline(yintercept = .80, color = "grey") + geom_hline(yintercept = .50, linetype = "dashed", color = "grey") +
+                    scale_color_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) + 
+                    theme_classic() + theme(legend.position = "none")
+
+#ggsave("accuracy_nodeheight_5x5.png")
+```
+
+```{r}
+pms <- unique(pairs$pm)
+mrs <- unique(pairs$mr)
+```
+
+
+# plot node_height by node_height_inf
+```{r, fig.width = 12, fig.height = 8}
+
+pairs %>% filter(gaia_target == 'inferred') %>% ggplot(aes(x = node_time, y = node_height_sim, color = seed)) + 
+                        geom_point() + 
+                        theme_classic() + 
+                        facet_wrap(pm~mr) +
+                        geom_abline(intercept = 0, slope = 1, color = "grey", linetype = "dashed", linewidth = 1) +
+                        scale_x_log10() + scale_y_log10() + 
+                        ylab("true") + xlab("inferred") + ggtitle("clade height")
+                      
+
+```
+
+# binomial logistic regression: accuracy~node_depth
+
+### get predicted scores for each node height using logistic regression 
+```{r}
+run_summary_grouped <- function(grouped_data, group_key) {
+  run <- grouped_data
+  model <- glm(score ~ log10(node_height_sim), family = "binomial", data = run)
+  augmented_run <- broom::augment(model, run) %>% mutate(probability = plogis(.fitted))
+  return(augmented_run) 
+}
+
+presult_df <- pairs %>%
+  group_by(pm, mr, seed, gaia_target) %>% 
+  group_modify(~run_summary_grouped(.x, .y)) 
+```
+
+
+# simulated - 1 per param situation (just geom_line fits)
+```{r, fig.width = 15, fig.height = 10}
+
+plot_list <- list() 
+count <- 1
+
+
+for (i in 1:length(pms)) {
+  for (j in 1:length(mrs)) {
+  
+  run <- presult_df %>% ungroup() %>% filter((pm == pms[i]) & (mr == mrs[j]) & (gaia_target == 'simulated'))
+  s <- sample(unique(run$seed), 1)
+  run <- run %>% filter(seed == s)
+  
+  p <- run %>% 
+          ggplot(aes(x=node_height_sim, y=score)) + 
+                      geom_point(alpha = 0.15) + 
+                      geom_smooth(method = "glm", method.args = list(family = "binomial")) +
+                      geom_line(aes(y = probability), linewidth = 1) + 
+                      #facet_wrap(~mr) + 
+                      labs(x="node_depth", y="accuracy") + 
+                      scale_x_log10() + 
+                      geom_hline(yintercept = .80,  linetype = "dashed", color = "grey") + #geom_hline(yintercept = .50, linetype = "dashed", color = "grey") +
+                      #scale_color_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) + 
+                      theme_classic() + ggtitle(paste0("p/m: ", pms[i], ", mr: ", mrs[j]))
+  
+  plot_list[[count]] <- p
+  count <- count + 1
+  }
+}
+do.call(grid.arrange, c(plot_list, nrow = 5, ncol = 5 ))
+
+```
+
+# overlay inferred run, fit
+```{r, fig.width = 15, fig.height = 10}
+
+plot_list <- list() 
+count <- 1
+
+for (i in 1:length(pms)) {
+  for (j in 1:length(mrs)) {
+  
+  run <- presult_df %>% ungroup() %>% filter((pm == pms[i]) & (mr == mrs[j])) #& (match == 1))
+  s <- sample(unique(run$seed), 1)
+  run <- run %>% filter(seed == s)
+
+  p <- run %>% 
+          ggplot(aes(x=node_height_sim, y=score, color = gaia_target)) + 
+                      geom_point(alpha = 0.15, aes(color = gaia_target)) + 
+                      geom_smooth(method = "glm", method.args = list(family = "binomial"), aes(fill = gaia_target)) +
+                      geom_line(aes(y = probability), linewidth = 1) + 
+                      #facet_wrap(~mr) + 
+                      labs(x="node_depth", y="accuracy") + 
+                      scale_x_log10() + 
+                      geom_hline(yintercept = .80,  linetype = "dashed", color = "grey") +# geom_hline(yintercept = .50, linetype = "dashed", color = "grey") +
+                      scale_color_manual(values = c("simulated" = "black", "inferred" = "#00A08A")) + 
+                      scale_fill_manual(values = c("simulated" = "#606060", "inferred" = "#00A08A")) + 
+                      theme_classic() + ggtitle(paste0("p/m: ", pms[i], ", mr: ", mrs[j])) + theme(legend.position = 'none')
+  
+  plot_list[[count]] <- p
+  count <- count + 1
+  }
+}
+do.call(grid.arrange, c(plot_list, nrow = 5, ncol = 5 ))
+
+```
+
+
+## predict accuracy across grid of node heights. get upper bound, lower bound, node_height threshold for which score drops below 80%; 
+```{r}
+run_summary_grouped <- function(grouped_data, group_key) {
+  # fit model 
+  model <- glm(score ~ log10(node_height_sim), family = "binomial", data = grouped_data)
+  
+  # grid of node_heights
+  grid_heights <- seq(min(grouped_data$node_height_sim), max(grouped_data$node_height_sim) * 1.5, length.out = 5000)
+  grid_df <- data.frame(node_height_sim = grid_heights)
+  
+  # predict scores on grid 
+  grid_preds <- predict(model, newdata = grid_df, type = "link", se.fit = TRUE)
+  
+  # calculate probabilities and confidence bounds for run
+  grid_df <- grid_df %>%
+    mutate(
+      probability  = plogis(grid_preds$fit),
+      lower_bound = plogis(grid_preds$fit - (1.96 * grid_preds$se.fit)),
+      upper_bound = plogis(grid_preds$fit + (1.96 * grid_preds$se.fit))
+    )
+  
+  # actual threshold where p crosses .80
+  # model_fits <- data.frame(node_height = grouped_data$node_height, 
+  #                          fit = predict(model, type = "response")) %>% 
+  #                          arrange(node_height)
+  # h_empirical <- model_fits$node_height[which(model_fits$fit <= 0.80)[1]]
+  
+
+  # find the first node height in the grid where each curve drops below 0.80
+  h_prob  <- grid_df$node_height_sim[which(grid_df$probability <= 0.80)[1]]
+  h_lower <- grid_df$node_height_sim[which(grid_df$lower_bound <= 0.80)[1]]
+  h_upper <- grid_df$node_height_sim[which(grid_df$upper_bound <= 0.80)[1]]
+  
+  h_prob50  <- grid_df$node_height_sim[which(grid_df$probability <= 0.50)[1]]
+  h_lower50 <- grid_df$node_height_sim[which(grid_df$lower_bound <= 0.50)[1]]
+  h_upper50 <- grid_df$node_height_sim[which(grid_df$upper_bound <= 0.50)[1]]
+
+  # predict on actual run data
+  orig_preds <- predict(model, newdata = grouped_data, type = "link", se.fit = TRUE)
+  
+  # add the bounds from grid prediction to run df
+  grouped_data %>%
+    mutate(
+      probability = plogis(orig_preds$fit),
+      lower_bound = plogis(orig_preds$fit - (1.96 * orig_preds$se.fit)),
+      upper_bound = plogis(orig_preds$fit + (1.96 * orig_preds$se.fit)),
+      #empirical_node_height_at_80 = h_empirical,
+      mean_node_height_at_80  = h_prob,
+      lower_node_height_at_80 = h_lower,
+      upper_node_height_at_80 = h_upper,
+      mean_node_height_at_50  = h_prob50,
+      lower_node_height_at_50 = h_lower50,
+      upper_node_height_at_50 = h_upper50
+    ) %>%
+    arrange(node_height_sim)
+}
+
+pairs_df4 <- pairs %>%
+ # filter(match == 1) %>%
+  group_by(pm, mr, seed, gaia_target) %>%
+  group_modify(~run_summary_grouped(.x, .y)) %>%
+  ungroup()
+
+
+pairs_df4$gaia_target <- factor(pairs_df4$gaia_target, levels = c('simulated', 'inferred'))
+
+pairs_df4 <- pairs_df4
+
+```
+
+
+node height threshold (sim)
+```{r, fig.width = 15, fig.height = 10}
+
+plot_list <- list() 
+count <- 1
+
+for (i in 1:length(pms)) {
+  for (j in 1:length(mrs)) {
+  
+  run <- pairs_df4 %>% ungroup() %>% filter((pm == pms[i]) & (mr == mrs[j]) & (gaia_target == 'simulated'))
+  s <- sample(unique(run$seed), 1)
+  run <- run %>% filter(seed == s)
+  
+  p <- run %>% 
+          ggplot(aes(x=node_height_sim, y=score)) + 
+                      geom_point(alpha = 0.1) + 
+                      #geom_smooth(method = "glm", method.args = list(family = "binomial")) +
+                      geom_line(aes(y = probability), linewidth = 1) + 
+                      #facet_wrap(~mr) + 
+                      labs(x="node_depth", y="accuracy") + 
+                      scale_x_log10() + 
+                      geom_hline(yintercept = .80, color = "grey") + 
+                      #geom_hline(yintercept = .50, linetype = "dashed", color = "grey") +
+                      geom_vline(xintercept = unique(run$mean_node_height_at_80), color = 'lightblue') + #predicted
+                      #geom_vline(xintercept = unique(run$empirial_node_height_bound), linetype = 'dotted', color = 'grey') + #true
+                      geom_rect(xmin = unique(run$lower_node_height_at_80), # shading the confidence intervals) 
+                                xmax = unique(run$upper_node_height_at_80), 
+                                #alpha = 0.8, 
+                                ymin = 0, ymax = 1, 
+                                fill = 'blue') + 
+                      #scale_color_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) + 
+                      theme_classic() + ggtitle(paste0("p/m: ", pms[i], ", mr: ", mrs[j]))
+  
+  plot_list[[count]] <- p
+  count <- count + 1
+  }
+}
+
+#plot_list
+do.call(grid.arrange, c(plot_list, nrow = 5, ncol = 5 ))
+```
+
+# plot node depth threshold (0.8) with increasing mr (or pm)
+```{r, fig.width = 12, fig.height = 3}
+
+## boxplots where each point describes one run and each box describes an mr 
+
+pairs_df4 %>% 
+          ggplot(aes(x=factor(mr), y=mean_node_height_at_80, fill = gaia_target)) +
+          #geom_jitter(width = 0.1, alpha = 0.1, size = 0.1) + 
+          geom_boxplot(alpha = 0.4) + 
+          facet_wrap(~pm, nrow = 1) + 
+          labs(x="migration strength", y="node depth") +
+          scale_y_log10() + 
+          scale_fill_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) +
+          theme_bw() + ggtitle('node depth threshold where accuracy >= 0.80') + theme(legend.position = "none")
+
+
+# pairs_df4 %>% 
+#           ggplot(aes(x=factor(mr), y=mean_node_height_at_50, fill = gaia_target)) +
+#           #geom_jitter(width = 0.1, alpha = 0.1, size = 0.1) + 
+#           geom_boxplot(alpha = 0.4) + 
+#           facet_wrap(~pm, nrow = 1) + 
+#           labs(x="migration strength", y="node depth") +
+#           scale_y_log10() + 
+#           scale_fill_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) +
+#           theme_classic() + ggtitle('node depth threshold where accuracy >= 0.50') + theme(legend.position = "none")
+
+
+
+
+
+```
+
+
+
+```{r, fig.width = 7, fig.height = 5}
+
+## boxplots where each point describes one run and each box describes an mr 
+
+pairs_df4 %>% 
+          ggplot(aes(x=factor(mr), y=mean_node_height_at_80, fill = gaia_target)) +
+          #geom_jitter(width = 0.1, alpha = 0.1, size = 0.1) + 
+          geom_boxplot(alpha = 0.4) + 
+          #facet_wrap(~pm, nrow = 1) + 
+          labs(x="migration strength", y="node depth") +
+          scale_y_log10() + 
+          scale_fill_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) +
+          theme_bw() + ggtitle('node depth threshold where accuracy >= 0.80') + theme(legend.position = "none")  
+          
+
+
+# pairs_df4 %>% 
+#           ggplot(aes(x=factor(mr), y=mean_node_height_at_50, fill = gaia_target)) +
+#           #geom_jitter(width = 0.1, alpha = 0.1, size = 0.1) + 
+#           geom_boxplot(alpha = 0.4) + 
+#           #facet_wrap(~pm, nrow = 1) + 
+#           labs(x="migration strength", y="node depth") +
+#           scale_y_log10() + 
+#           scale_fill_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) +
+#           theme_classic() + ggtitle('node depth threshold where accuracy >= 0.50') + theme(legend.position = "none")
+
+
+
+```
+
+
