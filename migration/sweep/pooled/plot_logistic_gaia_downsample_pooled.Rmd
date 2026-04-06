@@ -52,7 +52,7 @@ options(repr.plot.width=14, repr.plot.height=8)
 
 ## read in scores df
 ```{r}
-pairs <- read.csv("scores_eq_pairs_003_downsample.csv")
+pairs <- read.csv("/home/nahmed/git/bacterial-args/migration/sweep/scores_eq_pairs_003_downsample.csv")
 pairs <- pairs %>% mutate(node_height_sim = node_time) %>% mutate(gaia_target = recode(gaia_target, "inf" = "inferred", "sim" = "simulated"))
 pairs$gaia_target <- factor(pairs$gaia_target, levels = c("simulated", "inferred"))
 pairs$mr <- factor(pairs$mr, 
@@ -107,9 +107,7 @@ pairs %>% filter(gaia_target == 'inferred') %>% ggplot(aes(x = node_time, y = no
                         facet_wrap(pm~mr) +
                         geom_abline(intercept = 0, slope = 1, color = "grey", linetype = "dashed", linewidth = 1) +
                         scale_x_log10() + scale_y_log10() + 
-                        ylab("true") + xlab("inferred") + ggtitle("simulated vs inferred mrca height")
-
-#ggsave("accuracy_nodeheight_5x5.png")
+                        ylab("true") + xlab("inferred") + ggtitle("clade height")
                       
 ```
 
@@ -256,15 +254,19 @@ run_summary_grouped <- function(grouped_data, group_key) {
     arrange(node_height_sim)
 }
 
-pairs_df4 <- pairs %>%
+```
+
+
+# pool by mr/pm 
+```{r}
+pooled_mr_pm <- pairs %>%
  # filter(match == 1) %>%
-  group_by(pm, mr, seed, gaia_target) %>%
+  group_by(pm, mr, gaia_target) %>%
   group_modify(~run_summary_grouped(.x, .y)) %>%
   ungroup()
 
 
-pairs_df4$gaia_target <- factor(pairs_df4$gaia_target, levels = c('simulated', 'inferred'))
-
+pooled_mr_pm$gaia_target <- factor(pooled_mr_pm$gaia_target, levels = c('simulated', 'inferred'))
 ```
 
 
@@ -277,7 +279,103 @@ count <- 1
 for (i in 1:length(pms)) {
   for (j in 1:length(mrs)) {
   
-  run <- pairs_df4 %>% ungroup() %>% filter((pm == pms[i]) & (mr == mrs[j]) & (gaia_target == 'simulated'))
+  run <- pooled_mr_pm %>% ungroup() %>% filter((pm == pms[i]) & (mr == mrs[j]) & (gaia_target == 'simulated'))
+  s <- sample(unique(run$seed), 1)
+  run <- run %>% filter(seed == s)
+  
+  p <- run %>% 
+          ggplot(aes(x=node_height_sim, y=score)) + 
+                      geom_point(alpha = 0.1) + 
+                      #geom_smooth(method = "glm", method.args = list(family = "binomial")) +
+                      geom_line(aes(y = probability), linewidth = 1) + 
+                      #facet_wrap(~mr) + 
+                      labs(x="node_depth", y="accuracy") + 
+                      scale_x_log10() + 
+                      geom_hline(yintercept = .80, color = "grey") + 
+                      #geom_hline(yintercept = .50, linetype = "dashed", color = "grey") +
+                      geom_vline(xintercept = unique(run$mean_node_height_at_80), color = 'lightblue') + #predicted
+                      #geom_vline(xintercept = unique(run$empirial_node_height_bound), linetype = 'dotted', color = 'grey') + #true
+                      geom_rect(xmin = unique(run$lower_node_height_at_80), # shading the confidence intervals) 
+                                xmax = unique(run$upper_node_height_at_80), 
+                                #alpha = 0.8, 
+                                ymin = 0, ymax = 1, 
+                                fill = 'blue') + 
+                      #scale_color_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) + 
+                      theme_classic() + ggtitle(paste0("p/m: ", pms[i], ", mr: ", mrs[j]))
+  
+  plot_list[[count]] <- p
+  count <- count + 1
+  }
+}
+
+#plot_list
+do.call(grid.arrange, c(plot_list, nrow = 5, ncol = 5 ))
+```
+
+# plot node depth threshold (0.8) with increasing mr + pm
+```{r, fig.width = 12, fig.height = 3}
+
+## boxplots where each point describes one run and each box describes an mr 
+
+pooled_mr_pm %>% 
+          ggplot(aes(x=factor(mr), y=mean_node_height_at_80, fill = gaia_target, group = gaia_target)) +
+          #geom_jitter(width = 0.1, alpha = 0.1, size = 0.1) + 
+          #geom_boxplot(alpha = 0.4) + 
+          geom_line() +
+          geom_ribbon(aes(ymin = lower_node_height_at_80, ymax = upper_node_height_at_80, fill = gaia_target), colour = NA, alpha = 0.3) + 
+          facet_wrap(~pm, nrow = 1) + 
+          labs(x="migration strength", y="node depth") +
+          scale_y_log10() + 
+          scale_fill_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) +
+          theme_classic() + ggtitle('node depth threshold where accuracy >= 0.80 (pooled by mr/pm)') + theme(legend.position = "none")
+
+#ggsave('../pooled/node_height_threshold_pooled_mr_pm_facet_pm.png')
+
+```
+
+
+
+```{r, fig.width = 7, fig.height = 5}
+
+## boxplots where each point describes one run and each box describes an mr 
+
+pooled_mr_pm %>% 
+          ggplot(aes(x=factor(mr), y=mean_node_height_at_80, fill = gaia_target)) +
+          #geom_jitter(width = 0.1, alpha = 0.1, size = 0.1) + 
+          geom_boxplot(alpha = 0.4) + 
+          #facet_wrap(~pm, nrow = 1) + 
+          labs(x="migration strength", y="node depth") +
+          scale_y_log10() + 
+          scale_fill_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) +
+          theme_bw() + ggtitle('node depth threshold where accuracy >= 0.80') + theme(legend.position = "none")  
+
+#ggsave("../pooled/node_height_threshold_by_mr_pooled_mr_pm.png")
+          
+```
+
+# pool by mr
+```{r}
+pooled_mr <- pairs %>%
+ # filter(match == 1) %>%
+  group_by(mr, gaia_target) %>%
+  group_modify(~run_summary_grouped(.x, .y)) %>%
+  ungroup()
+
+
+pooled_mr$gaia_target <- factor(pooled_mr$gaia_target, levels = c('simulated', 'inferred'))
+```
+
+
+node height threshold (sim)
+```{r, fig.width = 15, fig.height = 10}
+
+plot_list <- list() 
+count <- 1
+
+for (i in 1:length(pms)) {
+  for (j in 1:length(mrs)) {
+  
+  run <- pooled_mr %>% ungroup() %>% filter((pm == pms[i]) & (mr == mrs[j]) & (gaia_target == 'simulated'))
   s <- sample(unique(run$seed), 1)
   run <- run %>% filter(seed == s)
   
@@ -311,68 +409,22 @@ do.call(grid.arrange, c(plot_list, nrow = 5, ncol = 5 ))
 ```
 
 # plot node depth threshold (0.8) with increasing mr (or pm)
-```{r, fig.width = 12, fig.height = 3}
-
-## boxplots where each point describes one run and each box describes an mr 
-
-pairs_df4 %>% 
-          ggplot(aes(x=factor(mr), y=mean_node_height_at_80, fill = gaia_target)) +
-          #geom_jitter(width = 0.1, alpha = 0.1, size = 0.1) + 
-          geom_boxplot(alpha = 0.4) + 
-          facet_wrap(~pm, nrow = 1) + 
-          labs(x="migration strength", y="node depth") +
-          scale_y_log10() + 
-          scale_fill_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) +
-          theme_bw() + ggtitle('node depth threshold where accuracy >= 0.80') + theme(legend.position = "none")
-
-#ggsave("node_height_threshold_by_pm_mr.png")
-
-# pairs_df4 %>% 
-#           ggplot(aes(x=factor(mr), y=mean_node_height_at_50, fill = gaia_target)) +
-#           #geom_jitter(width = 0.1, alpha = 0.1, size = 0.1) + 
-#           geom_boxplot(alpha = 0.4) + 
-#           facet_wrap(~pm, nrow = 1) + 
-#           labs(x="migration strength", y="node depth") +
-#           scale_y_log10() + 
-#           scale_fill_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) +
-#           theme_classic() + ggtitle('node depth threshold where accuracy >= 0.50') + theme(legend.position = "none")
-
-
-
-
-
-```
-
-
-
 ```{r, fig.width = 7, fig.height = 5}
 
 ## boxplots where each point describes one run and each box describes an mr 
 
-pairs_df4 %>% 
-          ggplot(aes(x=factor(mr), y=mean_node_height_at_80, fill = gaia_target)) +
+pooled_mr %>% 
+          ggplot(aes(x=factor(mr), y=mean_node_height_at_80, fill = gaia_target, group = gaia_target)) +
           #geom_jitter(width = 0.1, alpha = 0.1, size = 0.1) + 
-          geom_boxplot(alpha = 0.4) + 
+          #geom_boxplot(alpha = 0.4) + 
+          geom_line() +
+          geom_ribbon(aes(ymin = lower_node_height_at_80, ymax = upper_node_height_at_80, fill = gaia_target), colour = NA, alpha = 0.3) +
           #facet_wrap(~pm, nrow = 1) + 
           labs(x="migration strength", y="node depth") +
           scale_y_log10() + 
           scale_fill_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) +
-          theme_bw() + ggtitle('node depth threshold where accuracy >= 0.80') + theme(legend.position = "none")  
+          theme_bw() + ggtitle('node depth threshold where accuracy >= 0.80 (pooled by mr)') + theme(legend.position = "none")  
+
+#ggsave("../pooled/node_height_threshold_by_mr_pooled_mr.png")
           
-#ggsave("node_height_threshold_by_mr.png")
-
-# pairs_df4 %>% 
-#           ggplot(aes(x=factor(mr), y=mean_node_height_at_50, fill = gaia_target)) +
-#           #geom_jitter(width = 0.1, alpha = 0.1, size = 0.1) + 
-#           geom_boxplot(alpha = 0.4) + 
-#           #facet_wrap(~pm, nrow = 1) + 
-#           labs(x="migration strength", y="node depth") +
-#           scale_y_log10() + 
-#           scale_fill_manual(values = c("simulated" = "#F2AD00", "inferred" = "#00A08A")) +
-#           theme_classic() + ggtitle('node depth threshold where accuracy >= 0.50') + theme(legend.position = "none")
-
-
-
 ```
-
-
