@@ -1,0 +1,225 @@
+
+### packages 
+
+import os
+import gzip
+import csv
+import json
+import re
+
+import pandas as pd
+import numpy as np
+from itertools import combinations
+
+import tskit
+
+from Bio import Phylo
+from io import StringIO
+
+#### functions 
+
+def get_reference(ts_file, fa_file):
+    ts = tskit.load(input.ts)
+    seq = tskit.random_nucleotides(length=3e6, seed=123)
+    seq_list = list(seq)
+    states_list = [site.ancestral_state for site in ts.sites()]
+    sites = ts.tables.sites
+
+    sites_df = pd.DataFrame({
+        "position": sites.position,
+        "ancestral_state": states_list
+    })
+
+    sites_df['position'] = sites_df['position'].astype(int)
+
+    for row in sites_df.itertuples():
+        seq_list[row.position] = row.ancestral_state
+
+    res = "".join(seq_list)
+
+    with open(output.reference, "w") as f:
+        f.write(">Reference \n")
+        f.write(res)
+
+def get_control_df(tree_file, traits_file, outfile): 
+
+    #file = row['g_file'] 
+    t = Phylo.read(tree_file, format = 'newick')
+    tlength = t.total_branch_length()
+    samples = [str(i) for i in range(0, t.count_terminals())]
+
+    match = re.search(r'mu([\d\.e-]+)_', tree_file)
+    mu = float(match.group(1))
+    
+    locations = get_location_from_traits(traits_file)
+    rows = []
+
+    for a, b in combinations(samples, 2):
+            u = t.common_ancestor(a, b)
+            height = (tlength - t.distance(a,b))/mu 
+            
+            rows.append({
+                "sample_a": a, 
+                "sample_b": b,
+                "type": 'control',
+                "node": u.name, #[5:],
+                "node_height": height
+            })
+
+    ## define filename -> export 
+
+    df = pd.merge(pd.DataFrame(rows), locations, on = 'node')
+    df.to_csv(outfile, index=False) 
+
+def get_location_from_traits(traits_file): 
+    
+    with open(traits_file, 'r') as file: 
+        data = json.load(file) 
+   
+    dict = data['nodes']
+    subdict = {key: value for (key, value) in dict.items() if 'Node' in key}
+    subdict = pd.DataFrame(subdict).transpose()
+    
+    pops = pd.json_normalize(subdict['population_confidence']).set_index(subdict.index)
+    res = subdict.join(pops).drop(columns=['population_confidence'])
+    res[['1', '2', '3']] = res[['1', '2', '3']].fillna(0)
+    res['node'] = res.index
+    return res
+
+#### define wildcard
+
+wildcard_constraints:
+    run="[^/]+"
+
+RUNS, = glob_wildcards("trees/sim_{run}.trees")
+
+print(f"Detected runs: {RUNS}")
+#### rules 
+
+rule all: 
+    input: 
+        expand("locations/control_{run}.csv", run=RUNS)
+
+rule align: ########### get_alignment.py {input.ts} {output.alignment}
+    message: "generating alignment from simulated network"
+    input: 
+        ts="trees/sim_{run}.trees"
+    output:
+        alignment="alignments/sim_{run}.fa"
+    run:
+        ts = tskit.load(input.ts)
+        with open(output.alignment, "w") as f:
+            for id, a in enumerate(ts.alignments()):
+                f.write(f">{id}\n{a}\n")
+
+rule reference:
+    message: "generating reference .fa from simulated network"
+    input: 
+        ts="trees/sim_{run}.trees"
+    output:
+        reference="reference/sim_{run}.fa"
+    run: 
+        generate_reference_fasta(input.ts, output.reference)
+
+rule gubbins: 
+    message: "running gubbins"
+    input:
+        alignment="alignments/sim_{run}.fa"
+    output:
+        gtree = "sim_{run}.node_labelled.final_tree.tre"
+    conda: "gubbins"
+    retries: 1
+    shell:
+        """
+        run_gubbins.py --filter-percentage 100.0 --tree-builder iqtree --best-model {input.alignment}
+	sleep 100
+        """
+
+rule rescale: # rescale_tree.py 3000000 {input.gtree} {output.tree_raw}#
+    message: "rescaling gubbins phylogeny"
+    input:
+        unscaled_tree="sim_{run}.node_labelled.final_tree.tre"
+    output:
+        scaled_tree="rescaled/sim_{run}.nwk"
+    run:
+        tree = Phylo.read(input.unscaled_tree, 'newick') 
+        for clade in tree.find_clades():
+            if clade.branch_length is not None:
+                clade.branch_length /= float(3e6)
+        
+        Phylo.write(tree, output.scaled_tree, 'newick', format_branch_length="%1.10f")
+
+rule metadata: # get_metadata.py {input.ts} {output.metadata}
+    message: "getting metadata for simulated network"
+    input:
+        ts="trees/sim_{run}.trees"
+    output:
+        metadata="metadata/sim_{run}.tsv"
+    run:
+        ts = tskit.load(input.ts)
+        rows = []
+        for sample in ts.samples():
+            pop = ts.population(ts.node(sample).population).metadata["name"]
+            pop = int(pop[4:])+1
+            rows.append({
+                "strain": sample,
+                "population": pop,
+                "date": "2010-01-01"
+            })
+        
+        res =  pd.DataFrame(rows)
+        res.to_csv(output.metadata, index=False, sep = '\t')
+
+rule refine:
+    message: "running augur traits"
+    input:
+        tree_raw="rescaled/sim_{run}.nwk",
+        alignment="alignments/sim_{run}.fa",
+        vcf_ref = "vcf_stage/{run}.vcf",
+        metadata = "metadata/sim_{run}.tsv"
+    output:
+        node_data="results/sim_{run}_branch_lengths.json",
+        tree="results/sim_{run}.nwk",
+    shell:
+        """
+	source ~/augur-env/bin/activate 
+        augur refine \
+        --alignment {input.alignment} \
+        --tree {input.tree_raw} \
+        --output-tree {output.tree} \
+        --output-node-data {output.node_data} \
+        --vcf-reference {input.vcf_ref} \
+        --keep-root \
+        --clock-rate 1.0 \
+        --timetree \
+        --stochastic-resolve \
+        --metadata {input.metadata} 
+        """
+
+rule traits:
+    message: "running augur traits"
+    input:
+        tree = "results/sim_{run}.nwk",
+        metadata = "metadata/sim_{run}.tsv"
+    output:
+        node_data = "results/sim_{run}_traits.json"
+    shell:
+        """
+        source ~/augur-env/bin/activate 
+	augur traits \
+            --tree {input.tree} \
+            --metadata {input.metadata} \
+            --columns population \
+            --confidence \
+            --output-node-data {output.node_data}
+        """
+
+rule control: 
+    message: "generate control df" 
+    input: 
+        tree = "results/sim_{run}.nwk",
+        traits = "results/sim_{run}_traits.json"
+    output: 
+        df = "locations/control_{run}.csv" 
+    run:
+        get_control_df(input.tree, input.traits, output.df)
