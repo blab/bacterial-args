@@ -1,0 +1,238 @@
+### packages ####
+
+import os
+#import gzip
+import csv
+#import json
+#import re
+from pathlib import Path
+
+import pandas as pd
+import numpy as np
+#from itertools import combinations
+
+import tskit
+
+#import Bio
+#from Bio import Phylo
+#from io import StringIO
+
+#### functions ####
+
+def get_metadata(trees_file, out_file):
+    ts = tskit.load(trees_file)
+
+    data = {
+    'sample_id': ts.samples(),
+    'location': [ts.node(u).population for u in ts.samples()]
+    }
+
+    data = pd.DataFrame(data)
+
+    data.to_csv(out_file, index = False, sep = '\t')
+
+def get_subtrees_sim(trees_file): 
+    dir = Path(trees_file).stem
+    #Path(f"subtrees/{dir}").mkdir(exist_ok=True)
+    ts = tskit.load(trees_file)
+
+    # global node ids
+    id_labels = {node.id: str(node.id) for node in ts.nodes()}
+    
+    for tree in ts.trees():
+        filename = f"subtrees/{dir}/index{tree.index:04d}.nwk"
+        with open(filename, "w") as f:
+            f.write(tree.newick(node_labels=id_labels))
+
+def get_subtrees_inf(trees_file): 
+    dir = Path(trees_file).stem
+    Path(f"subtrees/{dir}").mkdir(exist_ok=True)
+    
+    ts = tskit.load(trees_file)
+
+    # global node ids
+    id_labels = {node.id: str(node.id) for node in ts.nodes()}
+    
+    for i in range(1,ts.num_trees-1): #remove flanking trees
+        tree = ts.at_index(i)
+        filename = f"subtrees/{dir}/index{tree.index:04d}.nwk"
+        with open(filename, "w") as f:
+            f.write(tree.newick(node_labels=id_labels))
+
+def score_sim(loc_file, res_file): 
+    loc = pd.read_csv(loc_file)
+    loc['mrca_population'] = loc['mrca_population'].str[-1:]
+    res = pd.read_csv(res_file, sep = "\t")
+    res = res.rename(columns = {'TREE_INDEX':'index', 'NODE_NAME':'node'})
+    merge = pd.merge(loc, res, on = ['node', 'index'], how='left')
+    merge['score'] = np.where(merge['mrca_population'].astype(str) == merge['STATE'].astype(str), 1, 0)
+
+    outfile = Path(loc_file).stem
+    merge.to_csv(f'scores/{outfile}.csv', index = False)
+
+
+def score_inf(loc_file_sim, loc_file_inf, res_file): 
+    locs = pd.read_csv(loc_file_sim)
+    locs['mrca_population'] = locs['mrca_population'].str[-1:]
+
+    loci = pd.read_csv(loc_file_inf)
+    loci = loci.drop(columns=['mrca_population'])
+    loci = loci.merge(locs[['sample_a', 'sample_b', 'bin', 'mrca_population', 'node_height_sim']], on=['sample_a', 'sample_b', 'bin'], how='left')
+    
+    res = pd.read_csv(res_file, sep = "\t")
+    res = res.rename(columns = {'TREE_INDEX':'index', 'NODE_NAME':'node'})
+
+    merge = pd.merge(loci, res, on = ['index', 'node'], how='left')
+    merge['score'] = np.where(merge['mrca_population'].astype(str) == merge['STATE'].astype(str), 1, 0)
+    
+    outfile = Path(loc_file_inf).stem
+    merge.to_csv(f'scores/{outfile}.csv', index = False)
+
+
+def score_ctrl(loc_file_sim, loc_file_ctrl):
+    res = pd.read_csv(loc_file_ctrl)
+    res['population'] = res['population'] - 1
+    res = res.rename(columns = {'population':'STATE'})
+
+    locs = pd.read_csv(loc_file_sim)
+    locs['mrca_population'] = locs['mrca_population'].str[-1:]
+
+    merge = locs.merge(res[['sample_a', 'sample_b','STATE']], on = ['sample_a', 'sample_b'], how= 'left')
+    merge['score'] = np.where(merge['mrca_population'].astype(str) == merge['STATE'].astype(str), 1, 0)
+
+    outfile = Path(loc_file_ctrl).stem
+    merge.to_csv(f'scores/{outfile}.csv', index = False)
+    
+
+#### define wildcard ####
+
+wildcard_constraints:
+    run="[^/]+"
+
+RUNS, = glob_wildcards("../control/ctrl/locations/success/simulated/sim_{run}.csv")
+
+#print(f"runs: {RUNS}")
+
+#### rules ####
+
+rule all: 
+    input: 
+        expand("scores/sim_{run}.csv", run=RUNS),
+        expand("scores/inf_{run}.csv", run=RUNS),
+        expand("scores/control_{run}.csv", run=RUNS)
+
+rule metadata:
+    message: "extracting metadata from tree sequence" 
+    input:
+        ts = "../control/ctrl/trees/sim_{run}.trees"
+    output:
+        metadata = "metadata/{run}.tsv" 
+    run:
+        get_metadata(input.ts, output.metadata) 
+
+
+rule subtrees_sim:
+    message: "extracting subtrees from tree sequence" 
+    input:
+        ts = "../control/ctrl/trees/sim_{run}.trees"
+    output:
+        outdir = directory("subtrees/sim_{run}")
+    shell:
+        """
+        mkdir -p {output.outdir}
+        python -c '
+import tskit
+from pathlib import Path
+dir_name = Path(f"{input.ts}").stem
+ts = tskit.load(f"{input.ts}")
+id_labels = {{node.id: str(node.id) for node in ts.nodes()}}
+for tree in ts.trees():
+    filename = f"subtrees/{{dir_name}}/index{{tree.index:04d}}.nwk"
+    with open(filename, "w") as f:
+        f.write(tree.newick(node_labels=id_labels))
+'
+        """
+
+
+
+rule subtrees_inf:
+    message: "extracting subtrees from tree sequence" 
+    input:
+        ts = "../control/ctrl/trees/inf_{run}.trees"
+    output:
+        outdir = directory("subtrees/inf_{run}/"),
+    shell:
+        """
+        mkdir -p {output.outdir}
+        #get_subtrees_inf(input.ts)
+        python -c '
+import tskit
+from pathlib import Path
+dir_name = Path(f"{input.ts}").stem
+ts = tskit.load(f"{input.ts}")
+id_labels = {{node.id: str(node.id) for node in ts.nodes()}}
+for i in range(1, ts.num_trees - 1):
+    tree = ts.at_index(i)
+    filename = f"subtrees/{{dir_name}}/index{{tree.index:04d}}.nwk"
+    with open(filename, "w") as f:
+        f.write(tree.newick(node_labels=id_labels))
+'
+
+        """
+
+rule dta_sim:
+    message: "merge subtrees + DTA" 
+    input:
+        indir = "subtrees/sim_{run}/",
+        metadata = "metadata/{run}.tsv",
+    output:
+        outfile = "out/sim_{run}/sim_{run}.states.tsv" # ?
+    shell:
+        """
+        source ~/augur-env/bin/activate 
+        python ./multi-tree-dta.py  --trees {input.indir} --output-prefix out/sim_{wildcards.run}/sim_{wildcards.run} --metadata {input.metadata} 
+        """
+
+rule dta_inf:
+    message: "merge subtrees + DTA" 
+    input:
+        indir = "subtrees/inf_{run}/",
+        metadata = "metadata/{run}.tsv",
+    output:
+        outfile = "out/inf_{run}/inf_{run}.states.tsv" # ?
+    shell:
+        """
+        source ~/augur-env/bin/activate 
+        python ./multi-tree-dta.py  --trees {input.indir} --output-prefix out/inf_{wildcards.run}/inf_{wildcards.run} --metadata {input.metadata} 
+        """
+
+rule score_sim: 
+    message: "scoring simulated args"
+    input:
+        loc_file = "../control/ctrl/locations/success/simulated/sim_{run}.csv",
+        res_file = "out/sim_{run}/sim_{run}.states.tsv",
+    output:
+        outfile = "scores/sim_{run}.csv"
+    run:
+        score_sim(input.loc_file, input.res_file)
+
+rule score_inf:
+    message: "scoring inferred args"
+    input:
+        loc_file_sim = "../control/ctrl/locations/success/simulated/sim_{run}.csv",
+        loc_file_inf = "../control/ctrl/locations/success/inferred/inf_{run}.csv",
+        res_file = "out/inf_{run}/inf_{run}.states.tsv",
+    output:
+        outfile = "scores/inf_{run}.csv"
+    run:
+        score_inf(input.loc_file_sim, input.loc_file_inf, input.res_file)
+
+rule score_ctrl: 
+    message: "scoring inferred trees"
+    input:
+        loc_file_sim = "../control/ctrl/locations/success/simulated/sim_{run}.csv",
+        loc_file_ctrl = "../control/ctrl/locations/success/control/control_{run}.csv",
+    output:
+        outfile = "scores/control_{run}.csv"
+    run:
+        score_ctrl(input.loc_file_sim, input.loc_file_ctrl)

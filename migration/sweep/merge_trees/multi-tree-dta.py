@@ -79,7 +79,7 @@ def load_trees(data_folder: str) -> list[TreeFile]:
     results = []
     for path in sorted(glob.glob(pattern)):
         basename = os.path.basename(path)
-        match = re.match(r'^index(\d+)_', basename)
+        match = re.match(r'^index(\d+)', basename)
         if not match:
             raise Exception("Unexpected tree filename. Must start with 'index' + number")
         index = int(match.group(1))
@@ -319,11 +319,11 @@ if __name__ == '__main__':
     parser.add_argument('--metadata', type=str, required=True, help='TSV file with node states')
     args = parser.parse_args()
     output = Path(args.output_prefix)
-    tree_file = output.name + ".multi-tree.nwk"
-    node_data_file = output.name + ".multi-tree-node-data.json"
-    auspice_file = output.name + ".multi-tree-auspice.json"
-    states_file = output.name + ".states.tsv"
-    stats_plot_file = output.name + ".agreement.png"
+    tree_file = str(output) + ".multi-tree.nwk"
+    node_data_file = str(output) + ".multi-tree-node-data.json"
+    auspice_file = str(output) + ".multi-tree-auspice.json"
+    states_file = str(output) + ".states.tsv"
+    stats_plot_file = str(output) + ".agreement.png"
 
     trees = load_trees(args.trees)
     metadata = load_metadata(args.metadata, trees)
