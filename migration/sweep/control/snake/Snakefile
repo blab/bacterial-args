@@ -56,7 +56,12 @@ def get_control_df(tree_file, traits_file, outfile):
 
     for a, b in combinations(samples, 2):
             u = t.common_ancestor(a, b)
-            height = (tlength - t.distance(a,b))/mu 
+            # MRCA time above tips = (patristic distance / 2) in subs, then / mu -> generations.
+            # This matches t.time(u) used for sim/inf in make_geo_dfs.ipynb and the ctrl/Snakefile.
+            # (Previously (tlength - distance)/mu, but total_branch_length() is the SUM of all
+            # branches, not tree height, so that was not comparable. See KNOWN_ISSUES.md; confirm
+            # before re-running the control.)
+            height = (t.distance(a, b) / 2) / mu
             
             rows.append({
                 "sample_a": a, 
