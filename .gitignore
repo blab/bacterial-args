@@ -1,0 +1,24 @@
+# --- OS / editor cruft ---
+.DS_Store
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# --- R / knitr ---
+.Rproj.user/
+.Rhistory
+.RData
+*_cache/
+*_files/
+
+# --- generated pipeline artifacts (regenerate; do not commit) ---
+vcf_stage/
+*.trees
+*.tsz
+*.vcz/
+*.zarr/
+*.vcf
+*.vcf.gz
+slurm-*.out
