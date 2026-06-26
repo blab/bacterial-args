@@ -30,7 +30,7 @@ library(gridExtra)
 
 ## set work dir
 ```{r}
-setwd("/home/nahmed/git/bacterial-args/migration/sweep/")
+setwd(here::here("migration/sweep"))
 ```
 
 ## ggplot theme

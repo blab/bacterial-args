@@ -30,7 +30,7 @@ library(gridExtra)
 
 ## set work dir
 ```{r}
-setwd("/home/nahmed/git/bacterial-args/migration/sweep/")
+setwd(here::here("migration/sweep"))
 ```
 
 ## ggplot theme
@@ -52,7 +52,7 @@ options(repr.plot.width=14, repr.plot.height=8)
 
 ## read in scores df
 ```{r}
-pairs <- read.csv("/home/nahmed/git/bacterial-args/migration/sweep/scores_eq_pairs_003_downsample.csv")
+pairs <- read.csv(here::here("migration/sweep/scores_eq_pairs_003_downsample.csv"))
 pairs <- pairs %>% mutate(node_height_sim = node_time) %>% mutate(gaia_target = recode(gaia_target, "inf" = "inferred", "sim" = "simulated"))
 pairs$gaia_target <- factor(pairs$gaia_target, levels = c("simulated", "inferred"))
 pairs$mr <- factor(pairs$mr, 
