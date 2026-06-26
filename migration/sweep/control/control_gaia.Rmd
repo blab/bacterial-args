@@ -2,7 +2,7 @@
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-knitr::opts_knit$set(root.dir = "/home/nahmed/git/bacterial-args/migration/sweep/control/snake")
+knitr::opts_knit$set(root.dir = here::here("migration/sweep/control/snake"))
 ```
 
 load libraries
@@ -24,8 +24,7 @@ library(scales)
 
 set work dir
 ```{r}
-#setwd("/home/nahmed/git/bacterial-args/migration/sweep_height_long/")
-#setwd("/home/nahmed/git/bacterial-args/migration/sweep/control/snake")
+# working dir is set via knitr root.dir above (here::here(...))
 ```
 
 ggplot theme

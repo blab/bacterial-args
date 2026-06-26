@@ -24,7 +24,7 @@ library(scales)
 
 set work dir
 ```{r}
-setwd("/home/nahmed/git/bacterial-args/migration/in_terminal")
+setwd(here::here("migration/in_terminal"))
 ```
 
 file import

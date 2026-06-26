@@ -28,7 +28,7 @@ library(scales)
 set work dir
 ```{r}
 getwd()
-#setwd("/home/nahmed/git/bacterial-args/migration/sweep_height_long/clades")
+# run from migration/sweep/clades/ (knit default) or use here::here("migration/sweep/clades")
 ```
 
 ggplot theme

@@ -23,7 +23,7 @@ library(scales)
 
 set work dir
 ```{r}
-#setwd("/home/nahmed/git/bacterial-args/migration/sweep_height_long/")
+# run from migration/sweep/ (knit default) or use here::here("migration/sweep")
 ```
 
 ggplot theme
